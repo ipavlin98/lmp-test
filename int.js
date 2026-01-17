@@ -1892,8 +1892,7 @@
 			param: { name: "disable_shorts_plugin", type: "trigger", default: false },
 			field: {
 				name: "Отключить Shorts",
-				description:
-					"Блокирует загрузку плагина Shorts и Shots (требуется перезагрузка)"
+				description: "Блокирует загрузку плагина Shorts"
 			},
 			onChange: function () {
 				window.location.reload();
@@ -1940,7 +1939,7 @@
 
 	function blockShortsPlugin() {
 		if (Lampa.Storage.get("disable_shorts_plugin", false)) {
-			var patterns = ["plugin/shots", "plugin/shorts", "plugin/tsarea"];
+			var patterns = ["plugin/shots", "plugin/shorts"];
 
 			var isBlocked = function (url) {
 				for (var i = 0; i < patterns.length; i++) {
