@@ -1893,7 +1893,7 @@
 			field: {
 				name: "Отключить Shorts",
 				description:
-					"Блокирует загрузку плагина Shorts (требуется перезагрузка)"
+					"Блокирует загрузку плагина Shorts и Shots (требуется перезагрузка)"
 			},
 			onChange: function () {
 				window.location.reload();
@@ -1940,16 +1940,25 @@
 
 	function blockShortsPlugin() {
 		if (Lampa.Storage.get("disable_shorts_plugin", false)) {
+			var patterns = ["plugin/shots", "plugin/shorts", "plugin/tsarea"];
+
+			var isBlocked = function (url) {
+				for (var i = 0; i < patterns.length; i++) {
+					if (url.indexOf(patterns[i]) !== -1) return true;
+				}
+				return false;
+			};
+
 			var originalPutScript = Lampa.Utils.putScript;
 			Lampa.Utils.putScript = function (url, callback, error_callback, sync) {
 				if (typeof url === "string") {
-					if (url.indexOf("shorts") !== -1) {
+					if (isBlocked(url)) {
 						if (callback) callback();
 						return;
 					}
 				} else if (Array.isArray(url)) {
 					var newUrl = url.filter(function (u) {
-						return u.indexOf("shorts") === -1;
+						return !isBlocked(u);
 					});
 					if (newUrl.length === 0) {
 						if (callback) callback();
@@ -1966,6 +1975,41 @@
 					}
 				}
 				return originalPutScript.apply(this, arguments);
+			};
+
+			var originalPutScriptAsync = Lampa.Utils.putScriptAsync;
+			Lampa.Utils.putScriptAsync = function (
+				url,
+				callback,
+				error_callback,
+				success_callback,
+				show_logs
+			) {
+				if (typeof url === "string") {
+					if (isBlocked(url)) {
+						if (callback) callback();
+						return;
+					}
+				} else if (Array.isArray(url)) {
+					var newUrl = url.filter(function (u) {
+						return !isBlocked(u);
+					});
+					if (newUrl.length === 0) {
+						if (callback) callback();
+						return;
+					}
+					if (newUrl.length !== url.length) {
+						return originalPutScriptAsync.call(
+							this,
+							newUrl,
+							callback,
+							error_callback,
+							success_callback,
+							show_logs
+						);
+					}
+				}
+				return originalPutScriptAsync.apply(this, arguments);
 			};
 		}
 	}
