@@ -1,6 +1,5 @@
 {
   "subscription": {
-    "active": true,
     "is_pro": true,
     "days_left": 17,
     "expires_at": "2026-03-01T23:59:59Z"
