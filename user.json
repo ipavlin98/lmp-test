@@ -1,0 +1,17 @@
+{
+  "subscription": {
+    "active": true,
+    "is_pro": false,
+    "days_left": 0
+  },
+  "playlists": {
+    "main": "https://skaz.tv/play/9e810e91"
+  },
+  "epg": {
+    "url": "https://skaz.tv/epg/9e810e91.xml.gz",
+    "days": 3
+  },
+  "meta": {
+    "generated_at": "2026-02-12T10:30:00Z"
+  }
+}
