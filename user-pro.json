@@ -1,0 +1,21 @@
+{
+  "subscription": {
+    "active": true,
+    "is_pro": true,
+    "days_left": 17,
+    "expires_at": "2026-03-01T23:59:59Z"
+  },
+  "playlists": {
+    "main": "https://skaz.tv/play/9e810e91",
+    "adult": "https://skaz.tv/play18/9e810e91",
+    "reserve": "http://skaztv.top/play/9e810e91",
+    "ua": "http://list.skaz.tv/play/9e810e91"
+  },
+  "epg": {
+    "url": "https://skaz.tv/epg/9e810e91.xml.gz",
+    "days": 3
+  },
+  "meta": {
+    "generated_at": "2026-02-12T10:30:00Z"
+  }
+}
