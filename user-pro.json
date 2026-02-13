@@ -11,7 +11,7 @@
     "ua": "http://list.skaz.tv/play/9e810e91"
   },
   "epg": {
-    "url": "https://skaz.tv/epg/9e810e91.xml.gz",
+    "url": "http://skaztv.online/epg.xml.gz",
     "days": 3
   },
   "meta": {
