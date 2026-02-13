@@ -4,7 +4,7 @@
     "days_left": 0
   },
   "playlists": {
-    "main": "https://skaz.tv/play/9e810e91"
+    "free": "https://skaz.tv/play/9e810e91"
   },
   "epg": {
     "url": "https://skaz.tv/epg/9e810e91.xml.gz",
