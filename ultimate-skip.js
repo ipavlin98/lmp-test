@@ -2,46 +2,11 @@
 	"use strict";
 
 	const ANISKIP_API = "https://api.aniskip.com/v2/skip-times";
-	const JIKAN_API = "https://api.jikan.moe/v4/anime";
 	const ANILIST_API = "https://graphql.anilist.co";
+	const JIKAN_API = "https://api.jikan.moe/v4/anime";
 	const GITHUB_DB_URL = "https://raw.githubusercontent.com/ipavlin98/lmp-series-skip-db/refs/heads/main/database/";
 	const SKIP_TYPES = ["op", "ed", "recap"];
 	const STORAGE_KEY = "ultimate_skip_offsets";
-	const FETCH_TIMEOUT = 8000;
-	const requestCache = new Map();
-
-	function sleep(ms) {
-		return new Promise((resolve) => setTimeout(resolve, ms));
-	}
-
-	async function fetchJson(url, options, attempts = 2) {
-		for (let attempt = 0; attempt < attempts; attempt++) {
-			const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-			const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT) : null;
-			try {
-				const response = await fetch(url, Object.assign({}, options, controller ? { signal: controller.signal } : {}));
-				if (response.ok) return await response.json();
-				if (response.status < 500 && response.status !== 429) return null;
-			} catch (e) {
-				// Retry network and temporary upstream errors once.
-			} finally {
-				if (timer) clearTimeout(timer);
-			}
-			if (attempt + 1 < attempts) await sleep(400 * (attempt + 1));
-		}
-		return null;
-	}
-
-	function cached(key, load) {
-		if (!requestCache.has(key)) {
-			const request = Promise.resolve().then(load);
-			requestCache.set(key, request);
-			request.then((value) => {
-				if (value === null) requestCache.delete(key);
-			}, () => requestCache.delete(key));
-		}
-		return requestCache.get(key);
-	}
 
 	function getCardId(card) {
 		if (!card) return null;
@@ -94,7 +59,7 @@
 		if (!card) return false;
 		const lang = (card.original_language || "").toLowerCase();
 		const isAsian = lang === "ja" || lang === "zh" || lang === "cn";
-		const isAnimation = Array.isArray(card.genres) && card.genres.some(
+		const isAnimation = card.genres && card.genres.some(
 			(g) => g.id === 16 || (g.name && g.name.toLowerCase() === "animation")
 		);
 		return isAsian || isAnimation;
@@ -129,47 +94,112 @@
 			return dbData.movie;
 		}
 
+		if (dbData.movie) {
+			return dbData.movie;
+		}
+
 		return null;
 	}
 
 	async function fetchFromGitHub(kpId) {
-		return cached("db:" + kpId, () => fetchJson(`${GITHUB_DB_URL}${kpId}.json`));
+		try {
+			const url = `${GITHUB_DB_URL}${kpId}.json`;
+			const response = await fetch(url);
+			return response.ok ? await response.json() : null;
+		} catch (e) {
+			return null;
+		}
 	}
 
-	async function searchAniList(query) {
-		const payload = {
-			query: "query ($search: String) { Page(page: 1, perPage: 10) { media(search: $search, type: ANIME) { idMal title { romaji english native } seasonYear startDate { year } } } }",
-			variables: { search: query }
-		};
-		const json = await fetchJson(ANILIST_API, {
-			method: "POST",
-			headers: { "Content-Type": "application/json", Accept: "application/json" },
-			body: JSON.stringify(payload)
-		});
-		if (!json || (json.errors && json.errors.length)) return [];
-		return (json.data && json.data.Page && json.data.Page.media ? json.data.Page.media : [])
-			.filter((item) => item.idMal)
-			.map((item) => ({
-				mal_id: item.idMal,
-				title: item.title.romaji,
-				title_english: item.title.english,
-				title_synonyms: [item.title.native].filter(Boolean),
-				year: item.seasonYear || (item.startDate && item.startDate.year)
-			}));
-	}
+	async function searchMalIdAniList(title, seas, year) {
+		let query = title;
+		if (seas > 1) query += " Season " + seas;
 
-	async function searchMalId(title, seas, year) {
-		if (!title) return null;
-		return cached(`mal:${title}|${seas}|${year}`, async () => {
-			let query = title;
-			if (seas > 1) query += " Season " + seas;
+		const graphqlQuery = `query ($search: String) {
+			Page(page: 1, perPage: 10) {
+				media(search: $search, type: ANIME) {
+					idMal
+					title { romaji english native }
+					seasonYear
+					synonyms
+				}
+			}
+		}`;
 
-			const jikan = await fetchJson(`${JIKAN_API}?q=${encodeURIComponent(query)}&limit=10`, {}, 1);
-			const results = jikan && jikan.data && jikan.data.length ? jikan.data : await searchAniList(query);
-			if (!results.length) return null;
+		try {
+			const response = await fetch(ANILIST_API, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "Accept": "application/json" },
+				body: JSON.stringify({ query: graphqlQuery, variables: { search: query } })
+			});
+
+			if (!response.ok) return null;
+			const json = await response.json();
+			const results = json.data && json.data.Page && json.data.Page.media;
+			if (!results || results.length === 0) return null;
+
+			const withMalId = results.filter((item) => item.idMal);
+			if (withMalId.length === 0) return null;
 
 			if (year && seas === 1) {
-				const match = results.find((item) => {
+				const match = withMalId.find((item) => String(item.seasonYear) === String(year));
+				if (match) return match.idMal;
+			}
+
+			if (seas > 1) {
+				const ordinal =
+					seas +
+					(seas % 10 === 1 && seas !== 11
+						? "st"
+						: seas % 10 === 2 && seas !== 12
+							? "nd"
+							: seas % 10 === 3 && seas !== 13
+								? "rd"
+								: "th");
+				const keywords = [
+					`Season ${seas}`,
+					`${ordinal} Season`,
+					`Season${seas}`
+				];
+
+				const titleMatch = withMalId.find((item) => {
+					const titlesToCheck = [
+						item.title && item.title.romaji,
+						item.title && item.title.english,
+						...(item.synonyms || [])
+					]
+						.filter(Boolean)
+						.map((t) => t.toLowerCase());
+
+					return titlesToCheck.some((t) =>
+						keywords.some((k) => t.includes(k.toLowerCase()))
+					);
+				});
+
+				if (titleMatch) return titleMatch.idMal;
+			}
+
+			return withMalId[0].idMal;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	async function searchMalIdJikan(title, seas, year) {
+		let query = title;
+		if (seas > 1) query += " Season " + seas;
+
+		const url = `${JIKAN_API}?q=${encodeURIComponent(query)}&limit=10`;
+
+		try {
+			const response = await fetch(url);
+			if (!response.ok) return null;
+			const json = await response.json();
+
+			if (!json.data || json.data.length === 0) return null;
+
+			if (year && seas === 1) {
+				const match = json.data.find((item) => {
 					let y = item.year;
 					if (!y && item.aired && item.aired.from)
 						y = item.aired.from.substring(0, 4);
@@ -196,7 +226,7 @@
 					`Season${seas}`
 				];
 
-				const titleMatch = results.find((item) => {
+				const titleMatch = json.data.find((item) => {
 					const titlesToCheck = [
 						item.title,
 						item.title_english,
@@ -215,18 +245,34 @@
 				}
 			}
 
-			return results[0].mal_id;
-		});
+			return json.data[0].mal_id;
+		} catch (e) {
+			return null;
+		}
+	}
+
+	async function searchMalId(title, seas, year) {
+		var malId = await searchMalIdAniList(title, seas, year);
+		if (malId) return malId;
+		return await searchMalIdJikan(title, seas, year);
 	}
 
 	async function fetchAniSkipSegments(malId, episode) {
 		const types = SKIP_TYPES.map((t) => "types=" + t);
 		types.push("episodeLength=0");
 		const url = `${ANISKIP_API}/${malId}/${episode}?${types.join("&")}`;
-		return cached(`skip:${malId}:${episode}`, async () => {
-			const data = await fetchJson(url);
-			return data && data.found && data.results ? data.results : [];
-		});
+
+		try {
+			const res = await fetch(url);
+			if (res.status === 404) return [];
+			const data = await res.json();
+			if (data.found && data.results && data.results.length > 0) {
+				return data.results;
+			}
+			return [];
+		} catch (e) {
+			return [];
+		}
 	}
 
 	function parseAniSkipSegments(rawSegments) {
@@ -290,7 +336,7 @@
 					const item = params.playlist[index];
 					return {
 						season: parseInt(item.season || item.s || defaultSeason),
-						episode: parseInt(item.episode || item.e || item.episode_number || index + 1)
+						episode: index + 1
 					};
 				}
 			}
@@ -313,7 +359,7 @@
 		const isAnime = isAnimeContent(card);
 
 		if (isAnime) {
-			let cleanName = card.original_name || card.original_title || card.name || card.title;
+			let cleanName = card.original_name || card.original_title || card.name;
 			const searchTerm = cleanName
 				? cleanName
 					.replace(/\(\d{4}\)/g, "")
