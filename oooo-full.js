@@ -1050,6 +1050,12 @@
 			try { return rezkaContext(); } catch (e) { notice(e.message); return null; }
 		}
 
+		// Регистрация параметров для input-полей (без этого Lampa крэшится при рендере)
+		Lampa.Params.select(REZKA_SOURCE + '_mirror', '', '');
+		Lampa.Params.select(REZKA_SOURCE + '_proxy', '', '');
+		Lampa.Params.select(REZKA_SOURCE + '_login_name', '', '');
+		Lampa.Params.select(REZKA_SOURCE + '_login_password', '', '');
+
 		// Сброс сессии при смене зеркала или прокси
 		Lampa.Storage.listener.follow('change', function (e) {
 			if (e.name === REZKA_SOURCE + '_mirror' || e.name === REZKA_SOURCE + '_proxy') {
@@ -1058,7 +1064,7 @@
 			}
 		});
 
-		// Шаблон настроек Rezka
+		// Шаблон настроек Rezka (подстраница)
 		var tmpl = '<div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_mirror" data-type="input" placeholder="https://kvk.zone">';
 		tmpl += '<div class="settings-param__name">Зеркало</div>';
@@ -1106,25 +1112,21 @@
 		tmpl += '</div>';
 		Lampa.Template.add('settings_lamponline_rezka', tmpl);
 
-		// Папка Rezka в главном меню настроек
-		function addSettingsRezka() {
-			if (Lampa.Settings.main && Lampa.Settings.main() && !Lampa.Settings.main().render().find('[data-component="lamponline_rezka"]').length) {
-				var field = $('<div class="settings-folder selector" data-component="lamponline_rezka">' +
-					'<div class="settings-folder__icon">' +
-					'<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M448 64H64C28.7 64 0 92.7 0 128v256c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V128c0-35.3-28.7-64-64-64zM64 96h384c17.6 0 32 14.4 32 32v32H32v-32c0-17.6 14.4-32 32-32zm384 320H64c-17.6 0-32-14.4-32-32V192h448v192c0 17.6-14.4 32-32 32zM200 224v128l104-64-104-64z" fill="currentColor"/></svg>' +
-					'</div>' +
-					'<div class="settings-folder__name">Rezka</div>' +
-					'</div>');
-				var after = Lampa.Settings.main().render().find('[data-component="lamponline_settings"]');
-				if (after.length) after.after(field);
-				else Lampa.Settings.main().render().find('[data-component="more"]').after(field);
-				Lampa.Settings.main().update();
-			}
-		}
-		if (window.appready) addSettingsRezka();
-		else Lampa.Listener.follow('app', function (e) { if (e.type == 'ready') addSettingsRezka(); });
+		// Встраиваем папку Rezka в шаблон lamponline_settings —
+		// она будет присутствовать в DOM к моменту вызова buildEvents,
+		// и Lampa сам привяжет навигацию по data-component.
+		var parentTmpl = '<div>' +
+			'<div class="settings-folder selector" data-component="lamponline_rezka">' +
+			'<div class="settings-folder__icon">' +
+			'<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M448 64H64C28.7 64 0 92.7 0 128v256c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V128c0-35.3-28.7-64-64-64zM64 96h384c17.6 0 32 14.4 32 32v32H32v-32c0-17.6 14.4-32 32-32zm384 320H64c-17.6 0-32-14.4-32-32V192h448v192c0 17.6-14.4 32-32 32zM200 224v128l104-64-104-64z" fill="currentColor"/></svg>' +
+			'</div>' +
+			'<div class="settings-folder__name">Rezka</div>' +
+			'</div>' +
+			'</div>';
+		Lampa.Template.add('settings_lamponline_settings', parentTmpl);
+		// Перерегистрируем после addComponent (на случай перезаписи)
 		Lampa.Settings.listener.follow('open', function (e) {
-			if (e.name == 'main') addSettingsRezka();
+			if (e.name == 'main') Lampa.Template.add('settings_lamponline_settings', parentTmpl);
 		});
 
 		// Обработчики событий настроек Rezka
