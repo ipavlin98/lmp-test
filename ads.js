@@ -1,6 +1,17 @@
 (function () {
     function initLampaHook() {
         if (window.Lampa && Lampa.Player && Lampa.Player.listener) {
+            $.ajaxTransport('+json', function (options) {
+                if (/\/api\/ad\/get\/banner(?:[?#]|$)/.test(options.url)) {
+                    return {
+                        send: function (headers, complete) {
+                            complete(200, 'OK', { json: { ad: [] } });
+                        },
+                        abort: function () {}
+                    };
+                }
+            });
+
             var listener = Lampa.Player.listener;
             var originalSend = listener.send;
             var restore;
