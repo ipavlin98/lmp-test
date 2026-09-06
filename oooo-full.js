@@ -1272,7 +1272,9 @@
 		value.slice(1).split(/,\s*\[/).forEach(function (part) {
 			var end = part.indexOf(']');
 			if (end < 0) return;
-			var label = part.slice(0, end).trim();
+			var rawLabel = part.slice(0, end).trim();
+			var label = rezkaMessage(rawLabel).replace(/\s+/g, ' ').trim();
+			var restricted = /prem-quality|prem-icon/i.test(rawLabel);
 			part.slice(end + 1).split(/;\s*\{/).forEach(function (variant) {
 				variant = variant.replace(/^\{?[^}]*\}/, '').replace(/[,;]\s*$/, '');
 				var links = variant.split(/\s+or\s+/).map(function (url) {
@@ -1280,7 +1282,7 @@
 					if (url.indexOf('//') === 0) url = 'https:' + url;
 					return /^https?:\/\/[^\s]+$/i.test(url) ? url : '';
 				}).filter(function (url) { return !!url; });
-				if (links.length) result.push({label: label, links: links});
+				if (label && links.length) result.push({label: label, links: links, restricted: restricted});
 			});
 		});
 		return result;
@@ -1503,13 +1505,14 @@
 					try {
 						if (!json.url) throw new Error(rezkaMessage(json.message || json.error || (json.premium_content ? 'Перевод доступен только с HDrezka Premium' : 'Rezka не вернула ссылку на поток.')));
 						var mp4 = Lampa.Storage.get(REZKA_SOURCE + '_mp4', false) === true;
-						var items = rezkaPlaylist(json.url).map(function (item) {
+						var playlist = rezkaPlaylist(json.url);
+						var items = playlist.filter(function (item) { return !item.restricted; }).map(function (item) {
 							var preferred = item.links.filter(function (url) { return (mp4 ? /\.mp4(?:[?#]|$)/i : /\.m3u8(?:[?#]|$)/i).test(url); });
 							var rank = item.label.match(/(\d+)\s*k/i), numeric = item.label.match(/\d+/);
 							return {label: item.label, url: (preferred.length ? preferred : item.links)[0], rank: rank ? Number(rank[1]) * 1000 : Number(numeric && numeric[0]) || 0};
 						});
 						items.sort(function (a, b) { return b.rank - a.rank || (a.label < b.label ? 1 : a.label > b.label ? -1 : 0); });
-						if (!items.length) throw new Error('В ответе Rezka нет поддерживаемых потоков.');
+						if (!items.length) throw new Error(playlist.some(function (item) { return item.restricted; }) ? 'Все качества этого перевода доступны только с HDRezka Premium. Выберите другой перевод.' : 'В ответе Rezka нет поддерживаемых потоков.');
 						var premium = !!json.premium_content, previous = '';
 						output = {url: items[0].url, quality: {}, subtitles: []};
 						items.forEach(function (item) {
@@ -2227,7 +2230,12 @@
 
 		function addRezkaSource() {
 			if (rezkaAuthorized()) {
-				sources[REZKA_SOURCE] = {name: "Rezka", show: true};
+				var ordered = {};
+				ordered[REZKA_SOURCE] = {name: "HDRezka", show: true};
+				Object.keys(sources).forEach(function (name) {
+					if (name !== REZKA_SOURCE) ordered[name] = sources[name];
+				});
+				sources = ordered;
 			} else {
 				delete sources[REZKA_SOURCE];
 			}
