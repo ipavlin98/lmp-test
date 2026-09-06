@@ -555,7 +555,9 @@
 					) {
 						var then = result.then;
 						if (typeof then === "function") {
-							return then.call(result, resolve, reject);
+							return execute(function (resolve, reject) {
+								then.call(result, resolve, reject);
+							});
 						}
 					}
 					state = 1;
@@ -592,14 +594,15 @@
 			}
 
 			this.then = function (onFulfilled, onRejected) {
-				var selfPromise = this;
 				return new SimplePromise(function (resolve, reject) {
-					handle({
+					var handler = {
 						onFulfilled: typeof onFulfilled === "function" ? onFulfilled : null,
 						onRejected: typeof onRejected === "function" ? onRejected : null,
 						resolve: resolve,
 						reject: reject
-					});
+					};
+					if (state === 0) queue.push(handler);
+					else next(function () { handle(handler); });
 				});
 			};
 
@@ -607,12 +610,28 @@
 				return this.then(null, onRejected);
 			};
 
-			var self = this;
-			try {
-				executor(resolve, reject);
-			} catch (e) {
-				reject(e);
+			function execute(executor) {
+				var done = false;
+				try {
+					executor(function (result) {
+						if (done) return;
+						done = true;
+						resolve(result);
+					}, function (error) {
+						if (done) return;
+						done = true;
+						reject(error);
+					});
+				} catch (e) {
+					if (!done) {
+						done = true;
+						reject(e);
+					}
+				}
 			}
+
+			var self = this;
+			execute(executor);
 		}
 
 		SimplePromise.resolve = function (val) {
@@ -807,7 +826,6 @@
 
 	var Network = Lampa.Reguest;
 
-	// Самостоятельное ядро Rezka: HTML разбирается только в неактивном документе.
 	var REZKA_SOURCE = 'rezka_local';
 	var rezkaSession = null;
 	var rezkaSerial = 0;
@@ -941,7 +959,6 @@
 			target = rezkaPageUrl(url, ctx);
 			var agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
 			if (ctx.proxy) {
-				// Формат online_mod enc2t/cookie_plus; секреты получает только указанный пользователем прокси.
 				var params = 'param/Origin=' + encodeURIComponent(ctx.host) + '/param/Referer=' + encodeURIComponent(ctx.host + '/') +
 					'/param/User-Agent=' + encodeURIComponent(agent) + '/cookie_plus/param/Cookie=' + encodeURIComponent(ctx.cookie) + '/';
 				var name = target.split('?')[0].split('/').pop().replace(/\.(php|asp|aspx|jsp|cgi|pl|py|rb)$/, '.txt');
@@ -1103,7 +1120,6 @@
 				if (/[\r\n]/.test(value) || !value.split(';').every(function (part) { return /^\s*[!#$%&'*+.^_`|~0-9A-Za-z-]+=[^;]*$/.test(part); })) {
 					notice('Некорректная cookie: нужны пары имя=значение без переноса строк.'); return;
 				}
-				// Кандидат изолирован от действующей сессии до успешной проверки.
 				var candidate = {};
 				Object.keys(ctx).forEach(function (key) { candidate[key] = ctx[key]; });
 				candidate.cookie = value.trim();
@@ -1434,9 +1450,11 @@
 		var select_timeout_timer;
 		var select_close_timer;
 		var destroyed = false;
+		var generation = 0;
+		var request_generation = 0;
 		var clarification_search_timer;
 		var clarification_search_value = null;
-		var filter_sources = {};
+		var filter_sources = [];
 		var filter_translate = {
 			season: Lampa.Lang.translate("torrent_serial_season"),
 			voice: Lampa.Lang.translate("torrent_parser_voice"),
@@ -1559,7 +1577,9 @@
 					3000,
 					{}
 				);
-				var save = data[object.movie.id] || {};
+				var save = data && data[object.movie.id];
+				if (!save || typeof save !== "object" || Array.isArray(save)) save = {};
+				if (!save.episodes_view || typeof save.episodes_view !== "object" || Array.isArray(save.episodes_view)) save.episodes_view = {};
 				Lampa.Arrays.extend(save, {
 					season: 0,
 					voice: 0,
@@ -1684,8 +1704,10 @@
 			}
 
 			function setDefaultQuality(data) {
-				if (Lampa.Arrays.getKeys(data.quality).length) {
+				if (data.quality && typeof data.quality === "object") {
 					for (var q in data.quality) {
+						if (!Object.prototype.hasOwnProperty.call(data.quality, q) ||
+							typeof data.quality[q] !== "string") continue;
 						if (parseInt(q) == Lampa.Storage.field("video_quality_default")) {
 							data.url = data.quality[q];
 							orUrlReserve(data);
@@ -1697,9 +1719,12 @@
 			}
 
 			function loadSubtitles(link) {
+				if (destroyed) return;
+				var token = generation;
 				network.silent(
 					account(link),
 					function (subs) {
+						if (destroyed || token !== generation) return;
 						Lampa.Player.subtitles(subs);
 					},
 					function (e) {
@@ -1759,7 +1784,8 @@
 		ensureBalansersWithSearch();
 
 		function balanserName(j) {
-			var bals = j.balanser;
+			if (!j || typeof j.name !== "string") return "";
+			var bals = typeof j.balanser === "string" ? j.balanser : "";
 			var name = j.name.split(" ")[0];
 			return (bals || name).toLowerCase();
 		}
@@ -1871,7 +1897,10 @@
 			}
 
 			function onFilterSelectItem(a, b) {
-				var url = filter_find[a.stype][b.index].url;
+				if (!b || (a.stype !== "season" && a.stype !== "voice")) return;
+				var item = filter_find[a.stype][b.index];
+				if (!item || typeof item.url !== "string" || !item.url) return;
+				var url = item.url;
 				var choice = _this.getChoice();
 				if (a.stype == "voice") {
 					choice.voice_name = filter_find.voice[b.index].title;
@@ -1895,6 +1924,7 @@
 			}
 
 			filter.onSelect = function (type, a, b) {
+				if (destroyed || !a) return;
 				if (type == "filter") {
 					if (a.reset) onFilterReset();
 					else onFilterSelectItem(a, b);
@@ -2034,9 +2064,12 @@
 		};
 
 		this.rch = function (json, noreset) {
+			if (destroyed) return;
 			var _this2 = this;
+			var token = generation;
+			var request_token = request_generation;
 			rchRun(json, function () {
-				if (destroyed) return;
+				if (destroyed || token !== generation || request_token !== request_generation) return;
 				if (!noreset) _this2.find();
 				else noreset();
 			});
@@ -2103,8 +2136,10 @@
 		}
 
 		this.startSource = function (json) {
+			if (!Array.isArray(json)) return Promise.reject(new Error("Неверный список балансеров"));
 			json.forEach(function (j) {
 				var name = balanserName(j);
+				if (!name) return;
 				sources[name] = {
 					url: j.url,
 					name: j.name,
@@ -2140,6 +2175,7 @@
 
 		this.lifeSource = function () {
 			var _this3 = this;
+			var token = generation;
 			return new Promise(function (resolve, reject) {
 				var resolved = false;
 				var stopped = false;
@@ -2193,7 +2229,7 @@
 
 				function delayNext() {
 					life_wait_timer = setTimeout(function () {
-						if (destroyed) return;
+						if (destroyed || token !== generation) return;
 						if (!stopped) poll();
 					}, 1000);
 				}
@@ -2232,7 +2268,14 @@
 					NetworkManager.timeout(3000);
 					NetworkManager.silentPromise(url)
 						.then(function (json) {
-							if (destroyed) return;
+							if (destroyed || token !== generation) return;
+							if (json && json.accsdb) {
+								stopped = true;
+								reject(json);
+								return;
+							}
+							if (!json || !Array.isArray(json.online)) throw new Error("Неверный список балансеров");
+							json.online = json.online.filter(function (j) { return !!balanserName(j); });
 							life_wait_times++;
 							filter_sources = [];
 							sources = {};
@@ -2276,7 +2319,7 @@
 							}
 						})
 						["catch"](function (e) {
-							if (destroyed) return;
+							if (destroyed || token !== generation) return;
 							life_wait_times++;
 							if (life_wait_times > 15) {
 								stopped = true;
@@ -2342,6 +2385,8 @@
 		};
 
 		this.requestRezka = function (url) {
+			if (destroyed) return;
+			request_generation++;
 			var self = this;
 			rezka.load(object, this.getChoice(), url, function (result) {
 				if (destroyed) return;
@@ -2370,7 +2415,11 @@
 		};
 
 		this.request = function (url) {
+			if (destroyed) return;
 			if (balanser === REZKA_SOURCE) return this.requestRezka(url);
+			var token = generation;
+			var request_token = ++request_generation;
+			if (typeof url !== "string" || !url) return this.doesNotAnswer();
 			number_of_requests++;
 			var finalUrl = account(url);
 
@@ -2378,10 +2427,13 @@
 				network["native"](
 					finalUrl,
 					function (response) {
-						if (destroyed) return;
+						if (destroyed || token !== generation || request_token !== request_generation) return;
 						this.parse(response);
 					}.bind(this),
-					this.doesNotAnswer.bind(this),
+					function (e) {
+						if (destroyed || token !== generation || request_token !== request_generation) return;
+						this.doesNotAnswer(e);
+					}.bind(this),
 					false,
 					{
 						dataType: "text"
@@ -2440,6 +2492,7 @@
 						continue;
 					}
 					var data = JSON.parse(rawJson);
+					if (!data || typeof data !== "object" || Array.isArray(data)) continue;
 					var season = item.getAttribute("s");
 					var episode = item.getAttribute("e");
 					var text = item.textContent || item.innerText || "";
@@ -2470,20 +2523,28 @@
 		};
 
 		this.getFileUrl = function (file, call, waiting_rch) {
+			if (destroyed) return;
 			var _this = this;
+			var token = generation;
+			var cancelled = false;
+			if (!file || typeof file !== "object") {
+				call(false, {});
+				return;
+			}
 			if (file.rezka) {
 				Lampa.Loading.start(function () {
+					cancelled = true;
 					rezka.clear();
 					Lampa.Loading.stop();
 					Lampa.Controller.toggle("content");
 				});
 				return rezka.getStream(file, function (stream) {
-					if (destroyed) return;
+					if (destroyed || cancelled || token !== generation) return;
 					Lampa.Loading.stop();
 					file.qualitys = stream.quality;
 					call(stream, stream);
 				}, function (message) {
-					if (destroyed) return;
+					if (destroyed || cancelled || token !== generation) return;
 					Lampa.Loading.stop();
 					addRezkaSource();
 					filter_sources = Lampa.Arrays.getKeys(sources);
@@ -2506,7 +2567,12 @@
 				call(newfile, {});
 			} else if (file.method == "play") call(file, {});
 			else {
+				if (typeof file.url !== "string" || !file.url) {
+					call(false, {});
+					return;
+				}
 				Lampa.Loading.start(function () {
+					cancelled = true;
 					Lampa.Loading.stop();
 					Lampa.Controller.toggle("content");
 					network.clear();
@@ -2514,14 +2580,19 @@
 				network["native"](
 					account(file.url),
 					function (json) {
-						if (destroyed) return;
+						if (destroyed || cancelled || token !== generation) return;
+						if (!json || typeof json !== "object" || Array.isArray(json)) {
+							Lampa.Loading.stop();
+							call(false, {});
+							return;
+						}
 						if (json.rch) {
 							if (waiting_rch) {
 								Lampa.Loading.stop();
 								call(false, {});
 							} else {
 								_this.rch(json, function () {
-									if (destroyed) return;
+									if (destroyed || cancelled || token !== generation) return;
 									Lampa.Loading.stop();
 									_this.getFileUrl(file, call, true);
 								});
@@ -2532,7 +2603,7 @@
 						}
 					},
 					function () {
-						if (destroyed) return;
+						if (destroyed || cancelled || token !== generation) return;
 						Lampa.Loading.stop();
 						call(false, {});
 					}
@@ -2687,10 +2758,7 @@
 			if (destroyed) return;
 			var json = Lampa.Arrays.decodeJson(str, {});
 			if (Lampa.Arrays.isObject(str) && str.rch) json = str;
-			if (json.rch) return this.rch(json);
-
-			if (typeof str !== "string") {
-			}
+			if (json && json.rch) return this.rch(json);
 
 			try {
 				var items = this.parseJsonDate(str, ".videos__item");
@@ -2819,7 +2887,7 @@
 				elem.info = formatCardInfo(info);
 				var item = Lampa.Template.get("lampac_prestige_folder", balanser === REZKA_SOURCE
 					? $.extend({}, elem, {title: $("<span>").text(elem.title).html()}) : elem);
-				if (elem.img) {
+				if (typeof elem.img === "string" && elem.img) {
 					var image = $('<img class="lampac-similar-img"/>');
 					var img = image[0];
 					item.find(".online-prestige__folder").empty().append(image);
@@ -2904,6 +2972,9 @@
 		};
 
 		this.reset = function () {
+			if (destroyed) return;
+			generation++;
+			number_of_requests = 0;
 			last = false;
 			clearInterval(balanser_timer);
 			clearTimeout(life_wait_timer);
@@ -3023,6 +3094,9 @@
 		};
 
 		this.getEpisodes = function (season, call) {
+			if (destroyed) return;
+			var token = generation;
+			var request_token = request_generation;
 			var episodes = [];
 			var tmdb_id = object.movie.id;
 			if (["cub", "tmdb"].indexOf(object.movie.source || "tmdb") == -1)
@@ -3032,12 +3106,14 @@
 					"tv/" + tmdb_id + "/season/" + season,
 					{},
 					function (data) {
-						if (destroyed) return;
-						episodes = data.episodes || [];
+						if (destroyed || token !== generation || request_token !== request_generation) return;
+						episodes = data && Array.isArray(data.episodes) ? data.episodes.filter(function (episode) {
+							return episode && typeof episode === "object";
+						}) : [];
 						call(episodes);
 					},
 					function () {
-						if (destroyed) return;
+						if (destroyed || token !== generation || request_token !== request_generation) return;
 						call(episodes);
 					}
 				);
@@ -3708,8 +3784,10 @@
 					var indx = keys.indexOf(balanser);
 					var next = keys[indx + 1];
 					if (!next) next = keys[0];
+					if (!next) return;
 					balanser = next;
-					if (Lampa.Activity.active().activity == _this9.activity)
+					var active = Lampa.Activity.active();
+					if (active && active.activity == _this9.activity)
 						_this9.changeBalanser(balanser);
 				}
 			}, 1000);
@@ -3718,8 +3796,8 @@
 		this.getLastEpisode = function (items) {
 			var last_episode = 0;
 			items.forEach(function (e) {
-				if (typeof e.episode !== "undefined")
-					last_episode = Math.max(last_episode, parseInt(e.episode));
+				var episode = e && parseInt(e.episode, 10);
+				if (isFinite(episode)) last_episode = Math.max(last_episode, episode);
 			});
 			return last_episode;
 		};
@@ -3745,7 +3823,9 @@
 		this._lampacFilter = filter;
 
 		this.start = function () {
-			if (Lampa.Activity.active().activity !== this.activity) return;
+			if (destroyed) return;
+			var active = Lampa.Activity.active();
+			if (!active || active.activity !== this.activity) return;
 			if (!initialized) {
 				initialized = true;
 				this.initialize();
@@ -3793,7 +3873,14 @@
 		this.pause = function () {};
 		this.stop = function () {};
 		this.destroy = function () {
+			if (destroyed) return;
 			destroyed = true;
+			generation++;
+			clearInterval(balanser_timer);
+			clearTimeout(life_wait_timer);
+			clearTimeout(number_of_requests_timer);
+			clearTimeout(select_timeout_timer);
+			clearTimeout(select_close_timer);
 			rezka.clear();
 			last = false;
 			var need_flush_clarification = clarification_search_timer;
@@ -3816,38 +3903,42 @@
 			this.clearImages();
 			files.destroy();
 			scroll.destroy();
-			clearInterval(balanser_timer);
-			clearTimeout(life_wait_timer);
-			clearTimeout(number_of_requests_timer);
-			clearTimeout(select_timeout_timer);
-			clearTimeout(select_close_timer);
 		};
 	}
 
 	function addSourceSearch(spiderName, spiderUri) {
 		var network = new Lampa.Reguest();
+		var generation = 0;
 
 		var source = {
 			title: spiderName,
 			search: function (params, oncomplite) {
+				var token = ++generation;
+				network.clear();
+				var query = encodeURIComponent(params && params.query != null ? String(params.query) : "");
 				function searchComplite(links) {
-					var keys = Lampa.Arrays.getKeys(links);
+					if (token !== generation) return;
+					var keys = links && typeof links === "object" && !Array.isArray(links)
+						? Object.keys(links).filter(function (name) { return typeof links[name] === "string" && !!links[name]; }) : [];
 
 					if (keys.length) {
 						var status = new Lampa.Status(keys.length);
 
 						status.onComplite = function (result) {
+							if (token !== generation) return;
 							var rows = [];
 
 							keys.forEach(function (name) {
 								var line = result[name];
 
-								if (line && line.data && line.type == "similar") {
-									var cards = line.data.map(function (item) {
+								if (line && Array.isArray(line.data) && line.type == "similar") {
+									var cards = line.data.filter(function (item) {
+										return item && typeof item.title === "string" && typeof item.url === "string" && !!item.url;
+									}).map(function (item) {
 										item.title = Lampa.Utils.capitalizeFirstLetter(item.title);
 										item.release_date = item.year || "0000";
 										item.balanser = spiderUri;
-										if (item.img !== undefined) {
+										if (typeof item.img === "string") {
 											if (item.img.charAt(0) === "/")
 												item.img =
 													Defined.getLocalhost() + item.img.substring(1);
@@ -3872,9 +3963,11 @@
 							network.silent(
 								account(links[name]),
 								function (data) {
+									if (token !== generation) return;
 									status.append(name, data);
 								},
 								function () {
+									if (token !== generation) return;
 									status.error();
 								}
 							);
@@ -3890,23 +3983,26 @@
 							"lite/" +
 							spiderUri +
 							"?title=" +
-							params.query
+							query
 					),
 					function (json) {
-						if (json.rch) {
+						if (token !== generation) return;
+						if (json && json.rch) {
 							rchRun(json, function () {
+								if (token !== generation) return;
 								network.silent(
 									account(
 										Defined.getLocalhost() +
 											"lite/" +
 											spiderUri +
 											"?title=" +
-											params.query
+											query
 									),
 									function (links) {
 										searchComplite(links);
 									},
 									function () {
+										if (token !== generation) return;
 										oncomplite([]);
 									}
 								);
@@ -3916,11 +4012,13 @@
 						}
 					},
 					function () {
+						if (token !== generation) return;
 						oncomplite([]);
 					}
 				);
 			},
 			onCancel: function () {
+				generation++;
 				network.clear();
 			},
 			params: {
