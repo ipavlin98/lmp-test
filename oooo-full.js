@@ -1778,6 +1778,7 @@
 		var PlayerAdapter = (function () {
 			function toPlayElement(file) {
 				var play = {
+					lamponline_stream: true,
 					title: file.title,
 					url: file.url,
 					quality: file.qualitys,
@@ -4157,7 +4158,47 @@
 		Lampa.Search.addSource(source);
 	}
 
+	function initPlayerErrorFilter() {
+		var listener = Lampa.PlayerVideo && Lampa.PlayerVideo.listener;
+		if (!listener || typeof listener.send !== "function" ||
+			!Lampa.Player || typeof Lampa.Player.playdata !== "function" ||
+			listener.lamponline_error_filter) return;
+
+		var send = listener.send;
+		listener.send = function (type, event) {
+			if (type === "error" && event && event.fatal === false &&
+				event.error === "details [bufferStalledError] fatal [false]") {
+				var data = Lampa.Player.playdata();
+				if (data && data.lamponline_stream) return this;
+			}
+			return send.apply(this, arguments);
+		};
+		listener.lamponline_error_filter = true;
+	}
+
+	function initPlayerBuffer() {
+		var prototype = window.Hls && window.Hls.prototype;
+		if (!prototype || typeof prototype.loadSource !== "function" ||
+			prototype.lamponline_buffer || !Lampa.Player ||
+			typeof Lampa.Player.playdata !== "function") return;
+
+		var loadSource = prototype.loadSource;
+		prototype.loadSource = function () {
+			var data = Lampa.Player.playdata();
+			if (data && data.lamponline_stream && this.config) {
+				this.config.maxBufferLength = 180;
+				this.config.maxMaxBufferLength = 180;
+				this.config.maxBufferSize = 180000000;
+			}
+			return loadSource.apply(this, arguments);
+		};
+		prototype.lamponline_buffer = true;
+	}
+
 	function startPlugin() {
+		initPlayerErrorFilter();
+		initPlayerBuffer();
+		Lampa.Player.listener.follow("start", initPlayerBuffer);
 		window.lamponline_plugin = true;
 		var manifst = {
 			type: "video",
