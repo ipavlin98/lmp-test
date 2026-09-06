@@ -1023,7 +1023,7 @@
 				catch (e) { return false; }
 			});
 			if (!confirmed) {
-				ctx.confirmed = false;
+				rezkaForget(ctx);
 				error('Вход Rezka не подтверждён: сайт не вернул ссылку выхода. Выполните вход или проверьте зеркало и cookie.');
 				return;
 			}
@@ -1036,13 +1036,36 @@
 	function initRezkaSettings() {
 		if (rezkaSettingsReady) return;
 		rezkaSettingsReady = true;
-		var network = new Lampa.Reguest(), revision = 0;
-		function notice(message) {
+		var network = new Lampa.Reguest(), revision = 0, settingsBody, activeStatus;
+		function refresh() {
+			if (!settingsBody) return;
+			var ctx;
+			try { ctx = rezkaContext(); } catch (e) {}
+			var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
+			var cookies = ctx && (ctx.android || ctx.proxy);
+			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в HDRezka' : saved && saved.key === ctx.key ? 'Вход сохранён. Нажмите «Проверить вход» для проверки' : 'Вход не выполнен');
+			settingsBody.find('[data-name="' + REZKA_SOURCE + '_do_login"] .settings-param__name').text(cookies ? 'Войти в HDRezka и сохранить куки' : 'Войти в HDRezka');
+			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"]').toggleClass('hide', !cookies);
+			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__value').text(ctx && ctx.cookie ? 'Куки сохранены' : 'Не заданы');
+		}
+		function notice(message, success) {
+			if (activeStatus) activeStatus.removeClass('active error wait').addClass(success ? 'active' : 'error');
+			activeStatus = null;
+			refresh();
 			var text = document.createElement('span');
 			text.textContent = String(message || '');
 			Lampa.Noty.show(text.innerHTML);
 		}
-		function stop() { revision++; network.clear(); }
+		function stop() {
+			revision++;
+			network.clear();
+			if (activeStatus) activeStatus.removeClass('wait');
+			activeStatus = null;
+		}
+		function begin(item) {
+			stop();
+			activeStatus = $(item).find('.settings-param__status').removeClass('active error').addClass('wait');
+		}
 		function current(ctx, token) {
 			try { return token === revision && rezkaContext() === ctx; } catch (e) { return false; }
 		}
@@ -1055,28 +1078,27 @@
 		Lampa.Params.select(REZKA_SOURCE + '_proxy', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_login_name', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_login_password', '', '');
+		Lampa.Params.select(REZKA_SOURCE + '_mp4', {'false': 'HLS (m3u8)', 'true': 'MP4'}, false);
 
 		// Сброс сессии при смене зеркала или прокси
 		Lampa.Storage.listener.follow('change', function (e) {
 			if (e.name === REZKA_SOURCE + '_mirror' || e.name === REZKA_SOURCE + '_proxy') {
+				stop();
 				Lampa.Storage.set(REZKA_SOURCE + '_session', {});
 				rezkaSession = null;
+				refresh();
 			}
+			if (e.name === REZKA_SOURCE + '_login_name' || e.name === REZKA_SOURCE + '_login_password') stop();
 		});
 
 		// Шаблон настроек Rezka (подстраница)
-		var tmpl = '<div>';
+		var tmpl = '<div><div class="settings-param"><div class="settings-param__name">Аккаунт HDRezka</div><div class="settings-param__value rezka-account-state"></div></div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_mirror" data-type="input" placeholder="https://kvk.zone">';
-		tmpl += '<div class="settings-param__name">Зеркало</div>';
+		tmpl += '<div class="settings-param__name">Зеркало HDRezka</div>';
 		tmpl += '<div class="settings-param__value"></div>';
-		tmpl += '<div class="settings-param__descr">По умолчанию https://kvk.zone. Логин и cookie отправляются выбранному зеркалу.</div>';
+		tmpl += '<div class="settings-param__descr">Укажите доступное вам зеркало. По умолчанию: https://kvk.zone.</div>';
 		tmpl += '</div>';
-		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_proxy" data-type="input" placeholder="#{settings_cub_not_specified}">';
-		tmpl += '<div class="settings-param__name">Доверенный HTTPS-прокси</div>';
-		tmpl += '<div class="settings-param__value"></div>';
-		tmpl += '<div class="settings-param__descr">Необязательно. Только ваш HTTPS-прокси online_mod (enc2t, cookie_plus). Пустое поле — прямое соединение.</div>';
-		tmpl += '</div>';
-		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_login_name" data-type="input" placeholder="#{settings_cub_not_specified}">';
+		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_login_name" data-type="input" data-string="true" placeholder="#{settings_cub_not_specified}">';
 		tmpl += '<div class="settings-param__name">Логин или почта</div>';
 		tmpl += '<div class="settings-param__value"></div>';
 		tmpl += '</div>';
@@ -1085,29 +1107,34 @@
 		tmpl += '<div class="settings-param__value"></div>';
 		tmpl += '</div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_do_login" data-static="true">';
-		tmpl += '<div class="settings-param__name">Вход</div>';
+		tmpl += '<div class="settings-param__name">Войти в HDRezka</div>';
 		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">Браузер использует cookie сайта (withCredentials); необходимы разрешённые CORS и сторонние cookie.</div>';
+		tmpl += '<div class="settings-param__descr">Введите логин и пароль выше, затем нажмите здесь. Вход сохраняется для выбранного зеркала.</div>';
 		tmpl += '</div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_check" data-static="true">';
 		tmpl += '<div class="settings-param__name">Проверить вход</div>';
 		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">Проверить текущую сессию без ввода пароля, в том числе после перезапуска Lampa.</div>';
-		tmpl += '</div>';
-		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_cookie" data-static="true">';
-		tmpl += '<div class="settings-param__name">Проверить свою cookie</div>';
-		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">Только Android или доверенный прокси. Cookie сохраняется лишь после подтверждения входа.</div>';
+		tmpl += '<div class="settings-param__descr">Проверить, действует ли сохранённый вход.</div>';
 		tmpl += '</div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_logout" data-static="true">';
-		tmpl += '<div class="settings-param__name">Выход</div>';
+		tmpl += '<div class="settings-param__name">Выйти из HDRezka</div>';
 		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">Удалить локальную сессию и завершить вход на выбранном зеркале.</div>';
 		tmpl += '</div>';
-		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_format" data-static="true">';
+		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_mp4" data-type="select">';
 		tmpl += '<div class="settings-param__name">Формат потока</div>';
+		tmpl += '<div class="settings-param__value"></div>';
+		tmpl += '</div>';
+		tmpl += '<div class="settings-param-title"><span>Дополнительно</span></div>';
+		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_proxy" data-type="input" placeholder="Без прокси">';
+		tmpl += '<div class="settings-param__name">Прокси для HDRezka</div>';
+		tmpl += '<div class="settings-param__value"></div>';
+		tmpl += '<div class="settings-param__descr">Если прямое подключение не работает, укажите свой HTTPS-прокси, совместимый с online_mod. Через него выполняется и вход в аккаунт.</div>';
+		tmpl += '</div>';
+		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_cookie" data-static="true">';
+		tmpl += '<div class="settings-param__name">Куки HDRezka</div>';
+		tmpl += '<div class="settings-param__value"></div>';
 		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">По умолчанию HLS (m3u8). Нажмите для переключения на MP4 или обратно.</div>';
+		tmpl += '<div class="settings-param__descr">Можно вставить куки из браузера. При входе по логину и паролю заполняются автоматически.</div>';
 		tmpl += '</div>';
 		tmpl += '</div>';
 		Lampa.Template.add('settings_lamponline_rezka', tmpl);
@@ -1117,7 +1144,7 @@
 			'<div class="settings-folder__icon">' +
 			'<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M448 64H64C28.7 64 0 92.7 0 128v256c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V128c0-35.3-28.7-64-64-64zM64 96h384c17.6 0 32 14.4 32 32v32H32v-32c0-17.6 14.4-32 32-32zm384 320H64c-17.6 0-32-14.4-32-32V192h448v192c0 17.6-14.4 32-32 32zM200 224v128l104-64-104-64z" fill="currentColor"/></svg>' +
 			'</div>' +
-			'<div class="settings-folder__name">Rezka</div>' +
+			'<div class="settings-folder__name">HDRezka</div>' +
 			'</div>' +
 			'</div>';
 		Lampa.Template.add('settings_lamponline_settings', parentTmpl);
@@ -1135,18 +1162,23 @@
 
 		// Обработчики событий настроек Rezka
 		Lampa.Settings.listener.follow('open', function (e) {
+			stop();
+			settingsBody = null;
 			if (e.name !== 'lamponline_rezka') return;
+			settingsBody = e.body;
+			refresh();
 
 			e.body.find('[data-name="' + REZKA_SOURCE + '_do_login"]').unbind('hover:enter').on('hover:enter', function () {
-				stop();
+				begin(this);
 				var ctx = context(), token = revision;
 				if (!ctx) return;
-				var name = Lampa.Storage.get(REZKA_SOURCE + '_login_name', '');
-				var password = Lampa.Storage.get(REZKA_SOURCE + '_login_password', '');
+				var name = Lampa.Storage.value(REZKA_SOURCE + '_login_name', '').trim();
+				var password = Lampa.Storage.value(REZKA_SOURCE + '_login_password', '');
 				if (!name) { notice('Укажите логин или почту Rezka в поле выше.'); return; }
 				if (!password) { notice('Укажите пароль Rezka в поле выше.'); return; }
 				var candidate = {};
 				Object.keys(ctx).forEach(function (key) { candidate[key] = ctx[key]; });
+				candidate.cookie = '';
 				candidate.confirmed = false;
 				candidate.serial = ++rezkaSerial;
 				var data = 'login_name=' + encodeURIComponent(name) + '&login_password=' + encodeURIComponent(password) + '&login_not_save=0';
@@ -1159,15 +1191,15 @@
 					rezkaVerify(network, candidate, alive, function () {
 						rezkaSession = candidate;
 						rezkaRemember(candidate);
-						notice('Вход Rezka подтверждён.');
+						notice('Вы вошли в HDRezka.' + (candidate.android || candidate.proxy ? ' Куки сохранены автоматически.' : ''), true);
 					}, notice);
 				}, notice);
 			});
 
 			e.body.find('[data-name="' + REZKA_SOURCE + '_check"]').unbind('hover:enter').on('hover:enter', function () {
-				stop();
+				begin(this);
 				var ctx = context(), token = revision;
-				if (ctx) rezkaVerify(network, ctx, function () { return current(ctx, token); }, function () { notice('Вход Rezka подтверждён.'); }, notice);
+				if (ctx) rezkaVerify(network, ctx, function () { return current(ctx, token); }, function () { notice('Вход в HDRezka действует.', true); }, notice);
 			});
 
 			e.body.find('[data-name="' + REZKA_SOURCE + '_cookie"]').unbind('hover:enter').on('hover:enter', function () {
@@ -1175,8 +1207,16 @@
 				var ctx = context(), token = revision;
 				if (!ctx) return;
 				if (!ctx.android && !ctx.proxy) { notice('Браузер запрещает заголовок Cookie. Используйте вход либо явно настройте доверенный прокси.'); return; }
-				Lampa.Input.edit({title: 'Cookie Rezka (имя=значение; имя=значение)', value: '', nosave: true, free: true, nomic: true}, function (value) {
-					if (!value || !current(ctx, token)) return;
+				var item = this;
+				Lampa.Input.edit({title: 'Куки HDRezka', value: ctx.cookie, placeholder: 'имя=значение; имя=значение', nosave: true, free: true, nomic: true}, function (value) {
+					if (value == null || !current(ctx, token)) return;
+					begin(item);
+					token = revision;
+					if (!value.trim()) {
+						rezkaForget(ctx);
+						notice('Куки HDRezka удалены.', true);
+						return;
+					}
 					if (/[\r\n]/.test(value) || !value.split(';').every(function (part) { return /^\s*[!#$%&'*+.^_`|~0-9A-Za-z-]+=[^;]*$/.test(part); })) {
 						notice('Некорректная cookie: нужны пары имя=значение без переноса строк.'); return;
 					}
@@ -1188,33 +1228,28 @@
 					rezkaVerify(network, candidate, function () { return current(ctx, token); }, function () {
 						rezkaSession = candidate;
 						rezkaRemember(candidate);
-						notice('Cookie проверена, вход Rezka подтверждён.');
+						notice('Куки сохранены. Вы вошли в HDRezka.', true);
 					}, notice);
 				});
 			});
 
 			e.body.find('[data-name="' + REZKA_SOURCE + '_logout"]').unbind('hover:enter').on('hover:enter', function () {
-				stop();
+				begin(this);
 				var ctx = context(), token = revision;
 				if (!ctx) return;
 				var oldCookie = ctx.cookie;
 				rezkaForget(ctx);
 				rezkaSession = null;
 				var next = rezkaContext();
+				refresh();
 				ctx.cookie = oldCookie;
 				rezkaRequest(network, ctx, ctx.host + '/logout/', false, false, function () { return current(next, token); }, function () {
 					ctx.cookie = '';
-					notice('Выход Rezka выполнен.');
+					notice('Вы вышли из HDRezka.', true);
 				}, function () {
 					ctx.cookie = '';
 					notice('Локальный вход удалён. Выход на сайте не подтверждён; при необходимости выйдите через браузер.');
 				});
-			});
-
-			e.body.find('[data-name="' + REZKA_SOURCE + '_format"]').unbind('hover:enter').on('hover:enter', function () {
-				var mp4 = Lampa.Storage.get(REZKA_SOURCE + '_mp4', false) !== true;
-				Lampa.Storage.set(REZKA_SOURCE + '_mp4', mp4);
-				notice('Rezka: предпочтительный формат ' + (mp4 ? 'MP4' : 'HLS (m3u8)'));
 			});
 		});
 	}
