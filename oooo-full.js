@@ -3022,6 +3022,7 @@
 					title: title,
 					subtitle: balanser === REZKA_SOURCE ? $("<span>").text(items[value] || "").html() : items[value],
 					items: subitems,
+					noselect: true,
 					stype: type
 				});
 			};
