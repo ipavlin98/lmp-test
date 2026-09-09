@@ -1099,7 +1099,7 @@
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_proxy" data-type="input" placeholder="Без прокси">';
 		tmpl += '<div class="settings-param__name">Прокси для HDRezka</div>';
 		tmpl += '<div class="settings-param__value"></div>';
-		tmpl += '<div class="settings-param__descr">Если прямое подключение не работает, укажите свой HTTPS-прокси, совместимый с online_mod. Через него выполняется и вход в аккаунт.</div>';
+		tmpl += '<div class="settings-param__descr">Если зеркало не открывается напрямую, укажите HTTPS-адрес веб-прокси с поддержкой enc2 и cookie_plus, например https://proxy.example.com/. Обычные HTTP/SOCKS-прокси и адреса вида IP:порт не подходят. Через этот сервер также передаются логин, пароль и куки HDRezka. Оставьте поле пустым для подключения без прокси.</div>';
 		tmpl += '</div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_cookie" data-static="true">';
 		tmpl += '<div class="settings-param__name">Куки HDRezka</div>';
@@ -1113,7 +1113,7 @@
 		var parentTmpl = '<div>' +
 			'<div class="settings-folder selector" data-component="lamponline_rezka" data-static="true">' +
 			'<div class="settings-folder__icon">' +
-			'<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg"><path d="M448 64H64C28.7 64 0 92.7 0 128v256c0 35.3 28.7 64 64 64h384c35.3 0 64-28.7 64-64V128c0-35.3-28.7-64-64-64zM64 96h384c17.6 0 32 14.4 32 32v32H32v-32c0-17.6 14.4-32 32-32zm384 320H64c-17.6 0-32-14.4-32-32V192h448v192c0 17.6-14.4 32-32 32zM200 224v128l104-64-104-64z" fill="currentColor"/></svg>' +
+			'<svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect x="3" y="4" width="26" height="24" rx="3" stroke="currentColor" stroke-width="2"/><path d="M8 4v24M24 4v24M3 10h5M3 16h5M3 22h5M24 10h5M24 16h5M24 22h5" stroke="currentColor" stroke-width="2"/><path d="m13 11 8 5-8 5V11Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round"/></svg>' +
 			'</div>' +
 			'<div class="settings-folder__name">HDRezka</div>' +
 			'</div>' +
@@ -4056,24 +4056,6 @@
 		Lampa.Search.addSource(source);
 	}
 
-	function initPlayerErrorFilter() {
-		var listener = Lampa.PlayerVideo && Lampa.PlayerVideo.listener;
-		if (!listener || typeof listener.send !== "function" ||
-			!Lampa.Player || typeof Lampa.Player.playdata !== "function" ||
-			listener.lamponline_error_filter) return;
-
-		var send = listener.send;
-		listener.send = function (type, event) {
-			if (type === "error" && event && event.fatal === false &&
-				event.error === "details [bufferStalledError] fatal [false]") {
-				var data = Lampa.Player.playdata();
-				if (data && data.lamponline_stream) return this;
-			}
-			return send.apply(this, arguments);
-		};
-		listener.lamponline_error_filter = true;
-	}
-
 	function initPlayerBuffer() {
 		var prototype = window.Hls && window.Hls.prototype;
 		if (!prototype || typeof prototype.loadSource !== "function" ||
@@ -4084,9 +4066,9 @@
 		prototype.loadSource = function () {
 			var data = Lampa.Player.playdata();
 			if (data && data.lamponline_stream && this.config) {
-				this.config.maxBufferLength = 180;
-				this.config.maxMaxBufferLength = 180;
-				this.config.maxBufferSize = 180000000;
+				this.config.maxBufferLength = 360;
+				this.config.maxMaxBufferLength = 360;
+				this.config.maxBufferSize = 360000000;
 			}
 			return loadSource.apply(this, arguments);
 		};
@@ -4094,7 +4076,6 @@
 	}
 
 	function startPlugin() {
-		initPlayerErrorFilter();
 		initPlayerBuffer();
 		Lampa.Player.listener.follow("start", initPlayerBuffer);
 		window.lamponline_plugin = true;
