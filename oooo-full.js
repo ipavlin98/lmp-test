@@ -1331,7 +1331,11 @@
 		function index(items, id, name, fallback) {
 			var found = -1;
 			items.some(function (item, i) {
-				if ((id !== undefined && id !== '' && String(item.id) === String(id)) || (!id && name && item.title === name)) { found = i; return true; }
+				if (id !== undefined && id !== '' && String(item.id) === String(id)) { found = i; return true; }
+				return false;
+			});
+			if (found < 0 && name) items.some(function (item, i) {
+				if (item.title === name) { found = i; return true; }
 				return false;
 			});
 			return found >= 0 ? found : (items[Number(fallback)] ? Number(fallback) : 0);
@@ -2163,7 +2167,11 @@
 			Lampa.Storage.set(Config.StorageKeys.OnlineBalanser, balanser_name);
 			var to = this.getChoice(balanser_name);
 			var from = this.getChoice();
-			if (from.voice_name) to.voice_name = from.voice_name;
+			if (from.voice_name && from.voice_name !== to.voice_name) {
+				to.voice_name = from.voice_name;
+				to.voice_id = 0;
+				to.voice_url = "";
+			}
 			this.saveChoice(to, balanser_name);
 			Lampa.Activity.replace();
 		};
@@ -2187,6 +2195,20 @@
 			} else {
 				delete sources[REZKA_SOURCE];
 			}
+		}
+
+		function sourceItems() {
+			var items = filter_sources.map(function (name) {
+				return {
+					title: sources[name].name,
+					source: name,
+					selected: name == balanser,
+					ghost: !sources[name].show
+				};
+			});
+			if (filter_sources[0] === REZKA_SOURCE && items.length > 1)
+				items.splice(1, 0, {title: "Балансеры сервера", separator: true});
+			return items;
 		}
 
 		this.startSource = function (json) {
@@ -2290,17 +2312,7 @@
 							});
 							addRezkaSource();
 							filter_sources = Lampa.Arrays.getKeys(sources);
-							filter.set(
-								"sort",
-								filter_sources.map(function (e) {
-									return {
-										title: sources[e].name,
-										source: e,
-										selected: e == balanser,
-										ghost: !sources[e].show
-									};
-								})
-							);
+							filter.set("sort", sourceItems());
 							filter.chosen("sort", [
 								sources[balanser] ? sources[balanser].name : balanser
 							]);
@@ -3056,17 +3068,7 @@
 					return items;
 				})()
 			);
-			filter.set(
-				"sort",
-				filter_sources.map(function (e) {
-					return {
-						title: sources[e].name,
-						source: e,
-						selected: e == balanser,
-						ghost: !sources[e].show
-					};
-				})
-			);
+			filter.set("sort", sourceItems());
 			filter.chosen("server", [
 				(function () {
 					var servers = getServersList();
@@ -3164,6 +3166,13 @@
 				);
 		};
 
+		function fileHash(season, episode, voice) {
+			var title = object.movie.original_name || object.movie.original_title;
+			return Lampa.Utils.hash((episode
+				? [season, season > 10 ? ":" : "", episode, title].join("")
+				: title) + (voice || ""));
+		}
+
 		this.draw = function (items) {
 			var _this8 = this;
 			var params =
@@ -3217,27 +3226,8 @@
 							true
 						)
 					});
-					var hash_timeline = Lampa.Utils.hash(
-						element.season
-							? [
-									element.season,
-									element.season > 10 ? ":" : "",
-									element.episode,
-									object.movie.original_title
-								].join("")
-							: object.movie.original_title
-					);
-					var hash_behold = Lampa.Utils.hash(
-						element.season
-							? [
-									element.season,
-									element.season > 10 ? ":" : "",
-									element.episode,
-									object.movie.original_title,
-									element.voice_name
-								].join("")
-							: object.movie.original_title + element.voice_name
-					);
+					var hash_timeline = fileHash(element.season, element.episode);
+					var hash_behold = fileHash(element.season, element.episode, element.voice_name);
 					var data = {
 						hash_timeline: hash_timeline,
 						hash_behold: hash_behold
@@ -3433,8 +3423,10 @@
 					});
 					if (html && html[0]) fragment.appendChild(html[0]);
 				});
-				if (serial && episodes.length > items.length && !params.similars) {
-					var left = episodes.slice(items.length);
+				if (serial && episodes.length && !params.similars) {
+					var left = episodes.filter(function (episode) {
+						return !items.some(function (item) { return item.episode == episode.episode_number; });
+					});
 					var days_left_title = Lampa.Lang.translate("full_episode_days_left");
 					left.forEach(function (episode) {
 						var info = [];
@@ -3471,13 +3463,7 @@
 							.append(
 								Lampa.Timeline.render(
 									Lampa.Timeline.view(
-										Lampa.Utils.hash(
-											[
-												season,
-												episode.episode_number,
-												object.movie.original_title
-											].join("")
-										)
+										fileHash(season, episode.episode_number)
 									)
 								)
 							);
