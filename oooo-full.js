@@ -4068,6 +4068,8 @@
 		var pending;
 		player.listener.send = function (event, error) {
 			var data = Lampa.Player.playdata();
+			if (event === "error" && error && error.fatal === false &&
+				data && data.lamponline_stream) return this;
 			var media = active && active.media;
 			if (event === "error" && error && data && data.lamponline_stream &&
 				media && media === player.video()) {
