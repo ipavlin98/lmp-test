@@ -4071,8 +4071,7 @@
 			var media = active && active.media;
 			if (event === "error" && error && data && data.lamponline_stream &&
 				media && media === player.video()) {
-				if (!error.fatal && error.error === "details [bufferStalledError] fatal [false]") return;
-				if (error.fatal && /^details \[[^\]]+\] fatal \[true\]$/.test(error.error) &&
+				if (error.fatal &&
 					typeof media.canPlayType === "function" &&
 					media.canPlayType("application/vnd.apple.mpegurl")) {
 					if (pending === active) return;
@@ -4088,12 +4087,19 @@
 						var method = data.hls_type;
 						var hadMethod = Object.prototype.hasOwnProperty.call(data, "hls_type");
 						try {
+							Lampa.Noty.show("Ошибка воспроизведения. Пробуем системную обработку HLS…");
 							if (typeof player.saveParams === "function") player.saveParams();
 							player.destroy(true);
 							active = null;
 							data.hls_type = "native";
 							player.url(src, true);
 							var next = player.video();
+							next.addEventListener("playing", function started() {
+								next.removeEventListener("playing", started);
+								if (player.video() === next && Lampa.Player.playdata() === data) {
+									Lampa.Noty.show("Видео запущено с системной обработкой HLS");
+								}
+							});
 							if (position > 0 && isFinite(position)) {
 								next.addEventListener("loadedmetadata", function resume() {
 									next.removeEventListener("loadedmetadata", resume);
@@ -4102,9 +4108,8 @@
 									}
 								});
 							}
-							console.log("Онлайн: переход с HLS.js на системную обработку", error.error);
 						} catch (e) {
-							console.error("Онлайн: не удалось переключить обработку HLS", e);
+							Lampa.Noty.show("Не удалось переключиться на системную обработку HLS");
 							send.call(player.listener, event, error);
 						} finally {
 							if (hadMethod) data.hls_type = method;
