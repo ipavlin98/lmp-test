@@ -1044,14 +1044,12 @@
 			try { return rezkaContext(); } catch (e) { notice(e.message); return null; }
 		}
 
-		// Регистрация параметров для input-полей (без этого Lampa крэшится при рендере)
 		Lampa.Params.select(REZKA_SOURCE + '_mirror', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_proxy', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_login_name', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_login_password', '', '');
 		Lampa.Params.select(REZKA_SOURCE + '_mp4', {'false': 'HLS (m3u8)', 'true': 'MP4'}, false);
 
-		// Сброс сессии при смене зеркала или прокси
 		Lampa.Storage.listener.follow('change', function (e) {
 			if (e.name === REZKA_SOURCE + '_mirror' || e.name === REZKA_SOURCE + '_proxy') {
 				stop();
@@ -1062,7 +1060,6 @@
 			if (e.name === REZKA_SOURCE + '_login_name' || e.name === REZKA_SOURCE + '_login_password') stop();
 		});
 
-		// Шаблон настроек Rezka (подстраница)
 		var tmpl = '<div><div class="settings-param"><div class="settings-param__name">Аккаунт HDRezka</div><div class="settings-param__value rezka-account-state"></div></div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_mirror" data-type="input" placeholder="https://kvk.zone">';
 		tmpl += '<div class="settings-param__name">Зеркало HDRezka</div>';
@@ -1119,7 +1116,7 @@
 			'</div>' +
 			'</div>';
 		Lampa.Template.add('settings_lamponline_settings', parentTmpl);
-		// Перерегистрируем после addComponent (на случай перезаписи)
+
 		Lampa.Settings.listener.follow('open', function (e) {
 			if (e.name == 'main') Lampa.Template.add('settings_lamponline_settings', parentTmpl);
 			if (e.name == 'lamponline_settings') {
@@ -1131,7 +1128,6 @@
 			}
 		});
 
-		// Обработчики событий настроек Rezka
 		Lampa.Settings.listener.follow('open', function (e) {
 			stop();
 			settingsBody = null;
@@ -4050,9 +4046,11 @@
 			typeof Lampa.Player.playdata !== "function") return;
 
 		var loadSource = prototype.loadSource;
+		var active;
 		prototype.loadSource = function () {
 			var data = Lampa.Player.playdata();
 			if (data && data.lamponline_stream && this.config) {
+				active = this;
 				this.config.maxBufferLength = 360;
 				this.config.maxMaxBufferLength = 360;
 				this.config.maxBufferSize = 360000000;
@@ -4060,6 +4058,64 @@
 			return loadSource.apply(this, arguments);
 		};
 		prototype.lamponline_buffer = true;
+
+		var player = Lampa.PlayerVideo;
+		if (!player || !player.listener || typeof player.listener.send !== "function" ||
+			typeof player.video !== "function" || typeof player.destroy !== "function" ||
+			typeof player.url !== "function") return;
+
+		var send = player.listener.send;
+		var pending;
+		player.listener.send = function (event, error) {
+			var data = Lampa.Player.playdata();
+			var media = active && active.media;
+			if (event === "error" && error && data && data.lamponline_stream &&
+				media && media === player.video()) {
+				if (!error.fatal && error.error === "details [bufferStalledError] fatal [false]") return;
+				if (error.fatal && /^details \[[^\]]+\] fatal \[true\]$/.test(error.error) &&
+					typeof media.canPlayType === "function" &&
+					media.canPlayType("application/vnd.apple.mpegurl")) {
+					if (pending === active) return;
+					var hls = active;
+					var src = hls.url;
+					if (!src) return send.apply(this, arguments);
+					pending = hls;
+					setTimeout(function () {
+						pending = null;
+						if (active !== hls || hls.media !== media ||
+							Lampa.Player.playdata() !== data || player.video() !== media) return;
+						var position = media.currentTime;
+						var method = data.hls_type;
+						var hadMethod = Object.prototype.hasOwnProperty.call(data, "hls_type");
+						try {
+							if (typeof player.saveParams === "function") player.saveParams();
+							player.destroy(true);
+							active = null;
+							data.hls_type = "native";
+							player.url(src, true);
+							var next = player.video();
+							if (position > 0 && isFinite(position)) {
+								next.addEventListener("loadedmetadata", function resume() {
+									next.removeEventListener("loadedmetadata", resume);
+									if (player.video() === next && Lampa.Player.playdata() === data) {
+										try { next.currentTime = position; } catch (e) {}
+									}
+								});
+							}
+							console.log("Онлайн: переход с HLS.js на системную обработку", error.error);
+						} catch (e) {
+							console.error("Онлайн: не удалось переключить обработку HLS", e);
+							send.call(player.listener, event, error);
+						} finally {
+							if (hadMethod) data.hls_type = method;
+							else delete data.hls_type;
+						}
+					}, 0);
+					return;
+				}
+			}
+			return send.apply(this, arguments);
+		};
 	}
 
 	function startPlugin() {
