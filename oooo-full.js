@@ -1676,9 +1676,7 @@
 
 			function watched(set) {
 				var file_id = Lampa.Utils.hash(
-					object.movie.number_of_seasons
-						? object.movie.original_name
-						: object.movie.original_title
+					object.movie.original_name || object.movie.original_title
 				);
 				var watched = storageCache(
 					StorageKeys.OnlineWatchedLast,
