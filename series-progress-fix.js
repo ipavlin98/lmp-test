@@ -1,7 +1,6 @@
 (function () {
 	"use strict";
 	function injectStyles() {
-		if (document.getElementById("ep-design-css")) return;
 		var css = `
 			.card.ep-design-active .card-watched { display: none !important; }
 			.ep-watched-layer {
@@ -26,7 +25,11 @@
 			.card.focus .ep-watched-layer,
 			.card:hover .ep-watched-layer {
 				opacity: 1;
-				transition-delay: 0.4s;
+				animation: ep-watched-appear 0.2s ease 0.4s backwards;
+			}
+			@keyframes ep-watched-appear {
+				from { opacity: 0; }
+				to { opacity: 1; }
 			}
 			.ep-watched-body {
 				font-size: 0.9em;
@@ -70,10 +73,10 @@
 				font-weight: 600;
 			}
 		`;
-		var style = document.createElement("style");
+		var style = document.getElementById("ep-design-css") || document.createElement("style");
 		style.id = "ep-design-css";
 		style.innerHTML = css;
-		document.head.appendChild(style);
+		if (!style.parentNode) document.head.appendChild(style);
 	}
 	function getDaysFromNow(dateStr) {
 		if (!dateStr) return -1;
