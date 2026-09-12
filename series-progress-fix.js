@@ -228,20 +228,18 @@
 		var progress = getSeriesProgress(cardData);
 		if (!progress) return drawHTML(cardNode, [], false);
 		var titleKey = progress.title || cardData.original_name || cardData.original_title || cardData.name;
-		var hash = Lampa.Utils.hash([progress.season, progress.season > 10 ? ":" : "", progress.episode, titleKey].join(""));
-		drawHTML(cardNode, [{
-			title: '<span class="ep-num">' + Number(progress.episode) + " -</span> " + Lampa.Lang.translate("full_episode") + " " + Number(progress.episode),
-			percent: Lampa.Timeline.view(hash).percent,
-			isCurrent: true,
-			isMovie: false,
-		}], false);
+		cardNode.classList.add("ep-design-active");
 		var request = cardNode.epDesignRequest;
 		loadEpisodes(cardData, progress.season, function (episodes) {
-			if (!episodes.length || request !== cardNode.epDesignRequest) return;
+			if (request !== cardNode.epDesignRequest) return;
 			var indexInHistory = episodes.findIndex(function (ep) {
 				return ep.episode_number == progress.episode;
 			});
-			if (indexInHistory === -1) return;
+			if (indexInHistory === -1) {
+				drawHTML(cardNode, [], false);
+				cardNode.classList.add("ep-design-active");
+				return;
+			}
 			var lastWatchedIndex = -1;
 			episodes.forEach(function (ep, index) {
 				var hashStr = [ep.season_number, ep.season_number > 10 ? ":" : "", ep.episode_number, titleKey].join("");
