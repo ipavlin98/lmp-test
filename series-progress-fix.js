@@ -25,7 +25,7 @@
 			.card.focus .ep-watched-layer,
 			.card:hover .ep-watched-layer {
 				opacity: 1;
-				animation: ep-watched-appear 0.2s ease 0.4s backwards;
+				animation: ep-watched-appear 0.2s ease 0.3s backwards;
 			}
 			@keyframes ep-watched-appear {
 				from { opacity: 0; }
