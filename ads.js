@@ -1,49 +1,48 @@
-(function () {
-    function initLampaHook() {
-        if (window.Lampa && Lampa.Player && Lampa.Player.listener) {
-            $.ajaxTransport('+json', function (options) {
-                if (/\/api\/ad\/get\/banner(?:[?#]|$)/.test(options.url)) {
-                    return {
-                        send: function (headers, complete) {
-                            complete(200, 'OK', { json: { ad: [] } });
-                        },
-                        abort: function () {}
-                    };
-                }
-            });
+(function() {
+	var originalOpen = XMLHttpRequest.prototype.open;
 
-            var listener = Lampa.Player.listener;
-            var originalSend = listener.send;
-            var restore;
+	XMLHttpRequest.prototype.open = function(method, url) {
+		if (/\/api\/ad\/get\/banner\/?(?:[?#]|$)/.test(url)) {
+			arguments[1] = 'data:application/json,' + encodeURIComponent('{"ad":[]}');
+		}
 
-            listener.send = function (type, event) {
-                if (restore && (type === 'create' || type === 'start' || type === 'external' || type === 'destroy')) {
-                    restore();
-                    restore = null;
-                }
+		return originalOpen.apply(this, arguments);
+	};
 
-                var result = originalSend.apply(this, arguments);
+	function initLampaHook() {
+		if (window.Lampa && Lampa.Player && Lampa.Player.listener) {
+			var listener = Lampa.Player.listener;
+			var originalSend = listener.send;
+			var restore;
 
-                if (type === 'create' && event && event.data) {
-                    var data = event.data;
-                    var hadIptv = Object.prototype.hasOwnProperty.call(data, 'iptv');
-                    var iptv = data.iptv;
+			listener.send = function(type, event) {
+				if (restore && (type === 'create' || type === 'start' || type === 'external' || type === 'destroy')) {
+					restore();
+					restore = null;
+				}
 
-                    restore = function () {
-                        if (hadIptv) data.iptv = iptv;
-                        else delete data.iptv;
-                    };
+				var result = originalSend.apply(this, arguments);
 
-                    data.iptv = true;
-                    delete data.vast_url;
-                    delete data.vast_msg;
-                }
+				if (type === 'create' && event && event.data) {
+					var data = event.data;
+					var hadIptv = Object.prototype.hasOwnProperty.call(data, 'iptv');
+					var iptv = data.iptv;
 
-                return result;
-            };
-        } else {
-            setTimeout(initLampaHook, 500);
-        }
-    }
-    initLampaHook();
+					restore = function() {
+						if (hadIptv) data.iptv = iptv;
+						else delete data.iptv;
+					};
+
+					data.iptv = true;
+					delete data.vast_url;
+					delete data.vast_msg;
+				}
+
+				return result;
+			};
+		} else {
+			setTimeout(initLampaHook, 500);
+		}
+	}
+	initLampaHook();
 })();
