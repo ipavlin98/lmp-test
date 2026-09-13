@@ -3,6 +3,22 @@
 	function injectStyles() {
 		var css = `
 			.card.ep-design-active .card-watched { display: none !important; }
+			.ep-watched-wrap {
+				position: absolute;
+				top: 0;
+				right: 0;
+				bottom: 0;
+				left: 0;
+				z-index: 2;
+				pointer-events: none;
+				opacity: 0;
+				transition: opacity 0.2s ease;
+			}
+			.card.focus .ep-watched-wrap,
+			.card:hover .ep-watched-wrap {
+				opacity: 1;
+				transition-delay: 0.3s;
+			}
 			.ep-watched-layer {
 				position: absolute;
 				left: 0.4em;
@@ -19,12 +35,6 @@
 				flex-direction: column;
 				pointer-events: none;
 				overflow: hidden;
-				opacity: 0;
-				transition: opacity 0.2s ease;
-			}
-			.card.focus .ep-watched-layer,
-			.card:hover .ep-watched-layer {
-				opacity: 1;
 				animation: ep-watched-appear 0.2s ease 0.3s backwards;
 			}
 			@keyframes ep-watched-appear {
@@ -189,13 +199,16 @@
 		var layer = cardNode.querySelector(".ep-watched-layer");
 		cardNode.classList.toggle("ep-design-active", !!(items && items.length));
 		if (!items || !items.length) {
-			if (layer) layer.remove();
+			if (layer) (layer.closest(".ep-watched-wrap") || layer).remove();
 			return;
 		}
-		if (!layer) {
-			layer = document.createElement("div");
+		if (!layer || !layer.parentNode.classList.contains("ep-watched-wrap")) {
+			var wrap = document.createElement("div");
+			wrap.className = "ep-watched-wrap";
+			layer = layer || document.createElement("div");
 			layer.className = "ep-watched-layer";
-			viewContainer.appendChild(layer);
+			wrap.appendChild(layer);
+			viewContainer.appendChild(wrap);
 		}
 		if (isMovieMode) layer.classList.add("layer--movie");
 		else layer.classList.remove("layer--movie");
