@@ -327,6 +327,7 @@
 			OnlineBalanser: "online_balanser",
 			ActiveBalanser: "active_balanser",
 			OnlineChoicePrefix: "online_choice_",
+			OnlineHlsPrefix: "lamponline_hls_",
 			OnlineWatchedLast: "online_watched_last",
 			OnlineView: "online_view"
 		}
@@ -1534,6 +1535,11 @@
 		};
 		var filter_find = { season: [], voice: [] };
 
+		function getHlsType() {
+			var type = Lampa.Storage.get(Config.StorageKeys.OnlineHlsPrefix + balanser, "");
+			return type === "native" || type === "hlsjs" ? type : "";
+		}
+
 		var NetworkManager = (function () {
 			function getRchType() {
 				var hostkey = getActiveHostKey();
@@ -1734,6 +1740,8 @@
 					episode: file.episode,
 					voice_name: file.voice_name
 				};
+				var hls_type = getHlsType();
+				if (hls_type) play.hls_type = hls_type;
 				return play;
 			}
 
@@ -1970,6 +1978,11 @@
 				if (destroyed || !a) return;
 				if (type == "filter") {
 					if (a.reset) onFilterReset();
+					else if (a.stype === "hls" && b) {
+						Lampa.Storage.set(Config.StorageKeys.OnlineHlsPrefix + balanser, b.value);
+						a.subtitle = b.title;
+						a.items.forEach(function (item) { item.selected = item.value === b.value; });
+					}
 					else onFilterSelectItem(a, b);
 				} else if (type == "sort") {
 					onSortSelect(a);
@@ -3042,6 +3055,17 @@
 				add("voice", Lampa.Lang.translate("torrent_parser_voice"));
 			if (filter_items.season && filter_items.season.length)
 				add("season", Lampa.Lang.translate("torrent_serial_season"));
+			select.push({
+				title: "Обработка m3u8",
+				subtitle: getHlsType() === "native" ? "Системная" : getHlsType() === "hlsjs" ? "hls.js" : "Как в настройках Lampa",
+				items: [
+					{ title: "Как в настройках Lampa", value: "", selected: getHlsType() === "" },
+					{ title: "hls.js", value: "hlsjs", selected: getHlsType() === "hlsjs" },
+					{ title: "Системная", value: "native", selected: getHlsType() === "native" }
+				],
+				noselect: true,
+				stype: "hls"
+			});
 			filter.set("filter", select);
 			filter.set(
 				"server",
@@ -4044,11 +4068,9 @@
 			typeof Lampa.Player.playdata !== "function") return;
 
 		var loadSource = prototype.loadSource;
-		var active;
 		prototype.loadSource = function () {
 			var data = Lampa.Player.playdata();
 			if (data && data.lamponline_stream && this.config) {
-				active = this;
 				this.config.maxBufferLength = 360;
 				this.config.maxMaxBufferLength = 360;
 				this.config.maxBufferSize = 360000000;
@@ -4058,67 +4080,13 @@
 		prototype.lamponline_buffer = true;
 
 		var player = Lampa.PlayerVideo;
-		if (!player || !player.listener || typeof player.listener.send !== "function" ||
-			typeof player.video !== "function" || typeof player.destroy !== "function" ||
-			typeof player.url !== "function") return;
+		if (!player || !player.listener || typeof player.listener.send !== "function") return;
 
 		var send = player.listener.send;
-		var pending;
 		player.listener.send = function (event, error) {
 			var data = Lampa.Player.playdata();
 			if (event === "error" && error && error.fatal === false &&
 				data && data.lamponline_stream) return this;
-			var media = active && active.media;
-			if (event === "error" && error && data && data.lamponline_stream &&
-				media && media === player.video()) {
-				if (error.fatal &&
-					typeof media.canPlayType === "function" &&
-					media.canPlayType("application/vnd.apple.mpegurl")) {
-					if (pending === active) return;
-					var hls = active;
-					var src = hls.url;
-					if (!src) return send.apply(this, arguments);
-					pending = hls;
-					setTimeout(function () {
-						pending = null;
-						if (active !== hls || hls.media !== media ||
-							Lampa.Player.playdata() !== data || player.video() !== media) return;
-						var position = media.currentTime;
-						var method = data.hls_type;
-						var hadMethod = Object.prototype.hasOwnProperty.call(data, "hls_type");
-						try {
-							Lampa.Noty.show("Ошибка воспроизведения. Пробуем системную обработку HLS…");
-							if (typeof player.saveParams === "function") player.saveParams();
-							player.destroy(true);
-							active = null;
-							data.hls_type = "native";
-							player.url(src, true);
-							var next = player.video();
-							next.addEventListener("playing", function started() {
-								next.removeEventListener("playing", started);
-								if (player.video() === next && Lampa.Player.playdata() === data) {
-									Lampa.Noty.show("Видео запущено с системной обработкой HLS");
-								}
-							});
-							if (position > 0 && isFinite(position)) {
-								next.addEventListener("loadedmetadata", function resume() {
-									next.removeEventListener("loadedmetadata", resume);
-									if (player.video() === next && Lampa.Player.playdata() === data) {
-										try { next.currentTime = position; } catch (e) {}
-									}
-								});
-							}
-						} catch (e) {
-							Lampa.Noty.show("Не удалось переключиться на системную обработку HLS");
-							send.call(player.listener, event, error);
-						} finally {
-							if (hadMethod) data.hls_type = method;
-							else delete data.hls_type;
-						}
-					}, 0);
-					return;
-				}
-			}
 			return send.apply(this, arguments);
 		};
 	}
