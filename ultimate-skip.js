@@ -450,14 +450,10 @@
 			}
 		});
 
-		Lampa.Controller.listener.follow("toggle", function (event) {
-			if (event.name !== "select") {
-				return;
-			}
-
+		Lampa.Select.listener.follow("preshow", function (event) {
 			var active = Lampa.Activity.active();
 
-			var componentName = active.component ? active.component.toLowerCase() : "";
+			var componentName = active && active.component ? active.component.toLowerCase() : "";
 			if (
 				!active ||
 				!active.component ||
@@ -466,16 +462,9 @@
 				return;
 			}
 
-			var $filterTitle = $(".selectbox__title");
+			var menu = event.active;
 
-			if (
-				$filterTitle.length !== 1 ||
-				$filterTitle.text() !== Lampa.Lang.translate("title_filter")
-			) {
-				return;
-			}
-
-			if ($(".selectbox-item[data-ultimate-skip-offset]").length > 0) {
+			if (menu.title !== Lampa.Lang.translate("title_filter")) {
 				return;
 			}
 
@@ -489,15 +478,27 @@
 			var currentOffset = getOffset(cardId);
 			var offsetText = currentOffset === 0 ? "0" : (currentOffset > 0 ? "+" + currentOffset : String(currentOffset));
 
-			var $offsetItem = Lampa.Template.get("selectbox_item", {
-				title: Lampa.Lang.translate("ultimate_skip_offset"),
-				subtitle: offsetText + " " + Lampa.Lang.translate("ultimate_skip_offset_sec")
+			var offsetItem = menu.items.find(function (item) {
+				return item.stype === "ultimate_skip_offset";
 			});
 
-			$offsetItem.attr("data-ultimate-skip-offset", "true");
+			if (!offsetItem) {
+				offsetItem = {
+					title: Lampa.Lang.translate("ultimate_skip_offset"),
+					stype: "ultimate_skip_offset"
+				};
+				menu.items.push(offsetItem);
+			}
 
-			$offsetItem.on("hover:enter", function () {
-				Lampa.Select.close();
+			offsetItem.subtitle = offsetText + " " + Lampa.Lang.translate("ultimate_skip_offset_sec");
+			offsetItem.onSelect = function () {
+				menu.items.forEach(function (item) {
+					item.selected = item === offsetItem;
+				});
+
+				function returnToFilter() {
+					Lampa.Select.show(menu);
+				}
 
 				var items = [];
 				var values = [-30, -20, -15, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 15, 20, 30];
@@ -514,28 +515,14 @@
 				Lampa.Select.show({
 					title: Lampa.Lang.translate("ultimate_skip_offset"),
 					items: items,
-					onBack: function () {
-						Lampa.Controller.toggle("content");
-					},
+					onBack: returnToFilter,
 					onSelect: function (item) {
 						setOffset(cardId, item.value);
 						Lampa.Noty.show(Lampa.Lang.translate("ultimate_skip_offset") + ": " + (item.value === 0 ? "0" : (item.value > 0 ? "+" + item.value : item.value)) + " " + Lampa.Lang.translate("ultimate_skip_offset_sec"));
-						Lampa.Controller.toggle("content");
+						returnToFilter();
 					}
 				});
-			});
-
-			var $lastItem = $(".selectbox-item").last();
-			if ($lastItem.length) {
-				$lastItem.after($offsetItem);
-			} else {
-				var $scrollBody = $("body > .selectbox").find(".scroll__body");
-				$scrollBody.append($offsetItem);
-			}
-
-			Lampa.Controller.collectionSet(
-				$("body > .selectbox").find(".scroll__body")
-			);
+			};
 		});
 	}
 
