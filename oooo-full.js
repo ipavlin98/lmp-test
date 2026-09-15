@@ -3788,6 +3788,10 @@
 		if (rch) rch.typeInvoke(Config.Urls.getLampOnline(), function () {});
 		initPlayerBuffer();
 		Lampa.Player.listener.follow("start", initPlayerBuffer);
+		Lampa.Select.listener.follow("preshow", function (event) {
+			var active = Lampa.Activity.active();
+			if (active && active.component === "lamponline") event.active.nomark = true;
+		});
 		window.lamponline_plugin = true;
 		var manifst = {
 			type: "video",
