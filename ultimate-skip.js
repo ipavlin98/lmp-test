@@ -7,6 +7,7 @@
 	const GITHUB_DB_URL = "https://raw.githubusercontent.com/ipavlin98/lmp-series-skip-db/refs/heads/main/database/";
 	const SKIP_TYPES = ["op", "ed", "recap"];
 	const STORAGE_KEY = "ultimate_skip_offsets";
+	const segmentSources = new WeakMap();
 
 	function getCardId(card) {
 		if (!card) return null;
@@ -16,8 +17,7 @@
 	function getOffsets() {
 		try {
 			var data = Lampa.Storage.get(STORAGE_KEY, "{}");
-			if (typeof data === "string") return JSON.parse(data);
-			return data || {};
+			return Lampa.Arrays.isObject(data) ? data : {};
 		} catch (e) {
 			return {};
 		}
@@ -26,7 +26,8 @@
 	function getOffset(cardId) {
 		if (!cardId) return 0;
 		var offsets = getOffsets();
-		return offsets[cardId] || 0;
+		var value = Number(offsets[cardId]);
+		return Number.isFinite(value) ? value : 0;
 	}
 
 	function setOffset(cardId, value) {
@@ -37,17 +38,28 @@
 		} else {
 			offsets[cardId] = value;
 		}
-		Lampa.Storage.set(STORAGE_KEY, JSON.stringify(offsets));
+		Lampa.Storage.set(STORAGE_KEY, offsets);
+	}
+
+	function normalizeSegments(segments) {
+		if (!Array.isArray(segments)) return [];
+		return segments.filter(function (seg) {
+			return seg && seg.start != null && seg.end != null;
+		}).map(function (seg) {
+			return Object.assign({}, seg, { start: Number(seg.start), end: Number(seg.end) });
+		}).filter(function (seg) {
+			return Number.isFinite(seg.start) && Number.isFinite(seg.end) && seg.end > seg.start;
+		});
 	}
 
 	function applyOffset(segments, offset) {
-		if (!segments || !offset) return segments;
 		return segments.map(function (seg) {
-			return {
+			return Object.assign({}, seg, {
 				start: Math.max(0, seg.start + offset),
-				end: Math.max(0, seg.end + offset),
-				name: seg.name
-			};
+				end: Math.max(0, seg.end + offset)
+			});
+		}).filter(function (seg) {
+			return seg.end > seg.start;
 		});
 	}
 
@@ -55,232 +67,133 @@
 		return obj && obj.segments && obj.segments.skip && obj.segments.skip.length > 0;
 	}
 
+	function setSegments(target, segments, offset) {
+		if (!target || (hasExistingSegments(target) && !segmentSources.has(target.segments.skip))) return;
+		const skip = applyOffset(segments, offset);
+		const previous = target.segments;
+		target.segments = Object.assign({}, Lampa.Arrays.isObject(previous) ? previous : { duration_ms: previous }, { skip });
+		segmentSources.set(skip, segments);
+		return true;
+	}
+
+	function getPosition(params, defaultSeason = 1, defaultEpisode = 1) {
+		const season = parseInt(params.season || params.s, 10);
+		const episode = parseInt(params.episode || params.e || params.episode_number, 10);
+		return {
+			season: Number.isFinite(season) && season > 0 ? season : defaultSeason,
+			episode: Number.isFinite(episode) && episode > 0 ? episode : defaultEpisode
+		};
+	}
+
 	function isAnimeContent(card) {
 		if (!card) return false;
-		const lang = (card.original_language || "").toLowerCase();
+		const lang = String(card.original_language || "").toLowerCase();
 		const isAsian = lang === "ja" || lang === "zh" || lang === "cn";
-		const isAnimation = card.genres && card.genres.some(
-			(g) => g.id === 16 || (g.name && g.name.toLowerCase() === "animation")
+		const isAnimation = Array.isArray(card.genres) && card.genres.some(
+			(g) => g && (g.id === 16 || (g.name && String(g.name).toLowerCase() === "animation"))
 		);
 		return isAsian || isAnimation;
 	}
 
-	function updatePlaylist(playlist, currentSeason, currentEpisode, segments) {
-		if (playlist && Array.isArray(playlist)) {
-			playlist.forEach((item, index) => {
-				const itemSeason = item.season || item.s || currentSeason;
-				const itemEpisode = item.episode || item.e || item.episode_number || index + 1;
-
-				if (parseInt(itemEpisode) === parseInt(currentEpisode) && parseInt(itemSeason) === parseInt(currentSeason)) {
-					if (!hasExistingSegments(item)) {
-						item.segments = item.segments || {};
-						item.segments.skip = segments.slice();
-					}
-				}
-			});
-		}
-	}
-
 	function getSegmentsFromDb(dbData, season, episode) {
-		if (!dbData) return null;
+		if (!dbData) return [];
 		const seasonStr = String(season);
 		const episodeStr = String(episode);
 
 		if (dbData[seasonStr] && dbData[seasonStr][episodeStr]) {
-			return dbData[seasonStr][episodeStr];
+			return normalizeSegments(dbData[seasonStr][episodeStr]);
 		}
 
-		if (seasonStr === "1" && episodeStr === "1" && dbData.movie) {
-			return dbData.movie;
-		}
-
-		if (dbData.movie) {
-			return dbData.movie;
-		}
-
-		return null;
+		return normalizeSegments(dbData.movie);
 	}
 
-	async function fetchFromGitHub(kpId) {
-		try {
-			const url = `${GITHUB_DB_URL}${kpId}.json`;
-			const response = await fetch(url);
-			return response.ok ? await response.json() : null;
-		} catch (e) {
-			return null;
+	function requestJson(url, postData) {
+		return new Promise((resolve) => {
+			const network = new Lampa.Reguest();
+			network.silent(url, resolve, () => resolve(null), postData ? JSON.stringify(postData) : undefined, {
+				headers: postData ? { "Content-Type": "application/json", "Accept": "application/json" } : undefined
+			});
+		}).catch(() => null);
+	}
+
+	function findMalId(results, seas, year) {
+		const withMalId = results.filter((item) => item.id);
+		if (!withMalId.length) return null;
+
+		if (year && seas === 1) {
+			const match = withMalId.find((item) => String(item.year) === String(year));
+			if (match) return match.id;
 		}
+
+		if (seas > 1) {
+			const lastTwo = seas % 100;
+			const suffix = lastTwo >= 11 && lastTwo <= 13 ? "th" : ({ 1: "st", 2: "nd", 3: "rd" }[seas % 10] || "th");
+			const keywords = [`Season ${seas}`, `${seas}${suffix} Season`, `Season${seas}`].map((word) => word.toLowerCase());
+			const match = withMalId.find((item) => item.titles.some((title) =>
+				typeof title === "string" && keywords.some((word) => title.toLowerCase().includes(word))
+			));
+			if (match) return match.id;
+		}
+
+		return withMalId[0].id;
 	}
 
 	async function searchMalIdAniList(title, seas, year) {
-		let query = title;
-		if (seas > 1) query += " Season " + seas;
-
-		const graphqlQuery = `query ($search: String) {
-			Page(page: 1, perPage: 10) {
-				media(search: $search, type: ANIME) {
-					idMal
-					title { romaji english native }
-					seasonYear
-					synonyms
+		const query = seas > 1 ? title + " Season " + seas : title;
+		const json = await requestJson(ANILIST_API, {
+			query: `query ($search: String) {
+				Page(page: 1, perPage: 10) {
+					media(search: $search, type: ANIME) {
+						idMal
+						title { romaji english native }
+						seasonYear
+						synonyms
+					}
 				}
-			}
-		}`;
+			}`,
+			variables: { search: query }
+		});
+		const results = json && json.data && json.data.Page && json.data.Page.media;
+		if (!Array.isArray(results)) return null;
 
-		try {
-			const response = await fetch(ANILIST_API, {
-				method: "POST",
-				headers: { "Content-Type": "application/json", "Accept": "application/json" },
-				body: JSON.stringify({ query: graphqlQuery, variables: { search: query } })
-			});
-
-			if (!response.ok) return null;
-			const json = await response.json();
-			const results = json.data && json.data.Page && json.data.Page.media;
-			if (!results || results.length === 0) return null;
-
-			const withMalId = results.filter((item) => item.idMal);
-			if (withMalId.length === 0) return null;
-
-			if (year && seas === 1) {
-				const match = withMalId.find((item) => String(item.seasonYear) === String(year));
-				if (match) return match.idMal;
-			}
-
-			if (seas > 1) {
-				const ordinal =
-					seas +
-					(seas % 10 === 1 && seas !== 11
-						? "st"
-						: seas % 10 === 2 && seas !== 12
-							? "nd"
-							: seas % 10 === 3 && seas !== 13
-								? "rd"
-								: "th");
-				const keywords = [
-					`Season ${seas}`,
-					`${ordinal} Season`,
-					`Season${seas}`
-				];
-
-				const titleMatch = withMalId.find((item) => {
-					const titlesToCheck = [
-						item.title && item.title.romaji,
-						item.title && item.title.english,
-						...(item.synonyms || [])
-					]
-						.filter(Boolean)
-						.map((t) => t.toLowerCase());
-
-					return titlesToCheck.some((t) =>
-						keywords.some((k) => t.includes(k.toLowerCase()))
-					);
-				});
-
-				if (titleMatch) return titleMatch.idMal;
-			}
-
-			return withMalId[0].idMal;
-		} catch (e) {
-			return null;
-		}
+		return findMalId(results.filter(Boolean).map((item) => ({
+			id: item.idMal,
+			year: item.seasonYear,
+			titles: [item.title && item.title.romaji, item.title && item.title.english].concat(item.synonyms || [])
+		})), seas, year);
 	}
 
 	async function searchMalIdJikan(title, seas, year) {
-		let query = title;
-		if (seas > 1) query += " Season " + seas;
+		const query = seas > 1 ? title + " Season " + seas : title;
+		const json = await requestJson(JIKAN_API + "?q=" + encodeURIComponent(query) + "&limit=10");
+		if (!json || !Array.isArray(json.data)) return null;
 
-		const url = `${JIKAN_API}?q=${encodeURIComponent(query)}&limit=10`;
-
-		try {
-			const response = await fetch(url);
-			if (!response.ok) return null;
-			const json = await response.json();
-
-			if (!json.data || json.data.length === 0) return null;
-
-			if (year && seas === 1) {
-				const match = json.data.find((item) => {
-					let y = item.year;
-					if (!y && item.aired && item.aired.from)
-						y = item.aired.from.substring(0, 4);
-					return String(y) === String(year);
-				});
-				if (match) {
-					return match.mal_id;
-				}
-			}
-
-			if (seas > 1) {
-				const ordinal =
-					seas +
-					(seas % 10 === 1 && seas !== 11
-						? "st"
-						: seas % 10 === 2 && seas !== 12
-							? "nd"
-							: seas % 10 === 3 && seas !== 13
-								? "rd"
-								: "th");
-				const keywords = [
-					`Season ${seas}`,
-					`${ordinal} Season`,
-					`Season${seas}`
-				];
-
-				const titleMatch = json.data.find((item) => {
-					const titlesToCheck = [
-						item.title,
-						item.title_english,
-						...(item.title_synonyms || [])
-					]
-						.filter(Boolean)
-						.map((t) => t.toLowerCase());
-
-					return titlesToCheck.some((t) =>
-						keywords.some((k) => t.includes(k.toLowerCase()))
-					);
-				});
-
-				if (titleMatch) {
-					return titleMatch.mal_id;
-				}
-			}
-
-			return json.data[0].mal_id;
-		} catch (e) {
-			return null;
-		}
+		return findMalId(json.data.filter(Boolean).map((item) => ({
+			id: item.mal_id,
+			year: item.year || (item.aired && item.aired.from && String(item.aired.from).slice(0, 4)),
+			titles: [item.title, item.title_english].concat(item.title_synonyms || [])
+		})), seas, year);
 	}
 
-	async function searchMalId(title, seas, year) {
-		var malId = await searchMalIdAniList(title, seas, year);
-		if (malId) return malId;
-		return await searchMalIdJikan(title, seas, year);
+	async function searchMalId(title, seas, year, isCurrent) {
+		const malId = await searchMalIdAniList(title, seas, year);
+		if (malId || !isCurrent()) return malId;
+		return searchMalIdJikan(title, seas, year);
 	}
 
 	async function fetchAniSkipSegments(malId, episode) {
-		const types = SKIP_TYPES.map((t) => "types=" + t);
+		const types = SKIP_TYPES.map((type) => "types=" + type);
 		types.push("episodeLength=0");
-		const url = `${ANISKIP_API}/${malId}/${episode}?${types.join("&")}`;
-
-		try {
-			const res = await fetch(url);
-			if (res.status === 404) return [];
-			const data = await res.json();
-			if (data.found && data.results && data.results.length > 0) {
-				return data.results;
-			}
-			return [];
-		} catch (e) {
-			return [];
-		}
+		const data = await requestJson(ANISKIP_API + "/" + malId + "/" + episode + "?" + types.join("&"));
+		return data && data.found && Array.isArray(data.results) ? data.results : [];
 	}
 
 	function parseAniSkipSegments(rawSegments) {
 		if (!rawSegments || !rawSegments.length) return [];
 		const list = [];
 		rawSegments.forEach((s) => {
-			if (!s.interval) return;
-			const type = (s.skipType || s.skip_type || "").toLowerCase();
+			if (!s || !s.interval) return;
+			const type = String(s.skipType || s.skip_type || "").toLowerCase();
 			let name = "Пропустить";
 			if (type.includes("op")) name = "Опенинг";
 			else if (type.includes("ed")) name = "Эндинг";
@@ -299,131 +212,68 @@
 				list.push({ start, end, name });
 			}
 		});
-		return list;
+		return normalizeSegments(list);
 	}
 
-	async function searchAndApply(videoParams) {
-		let card = videoParams.movie || videoParams.card;
-		if (!card) {
-			const active = Lampa.Activity.active();
-			if (active) card = active.movie || active.card;
-		}
-		if (!card) return;
+	async function searchAndApply(videoParams, card, playlist, isCurrent) {
+		if (!card || !isCurrent()) return;
 
-		const title = videoParams.title || card.title || card.name || "";
-		const trailerKeywords = ["трейлер", "trailer", "тизер", "teaser"];
-		const isTrailerTitle = trailerKeywords.some((k) =>
-			title.toLowerCase().includes(k)
-		);
+		const title = String(videoParams.title || card.title || card.name || "").toLowerCase();
+		if (["трейлер", "trailer", "тизер", "teaser"].some((word) => title.includes(word))) return;
 
-		if (isTrailerTitle) {
-			return;
-		}
-
-		const kpId = card.kinopoisk_id || (card.source === "kinopoisk" ? card.id : null) || card.kp_id;
-
-		const position = (function (params, defaultSeason = 1) {
-			if (params.episode || params.e || params.episode_number) {
-				return {
-					season: parseInt(params.season || params.s || defaultSeason),
-					episode: parseInt(params.episode || params.e || params.episode_number)
-				};
-			}
-			if (params.playlist && Array.isArray(params.playlist)) {
-				const url = params.url;
-				const index = params.playlist.findIndex((p) => p.url && p.url === url);
-				if (index !== -1) {
-					const item = params.playlist[index];
-					return {
-						season: parseInt(item.season || item.s || defaultSeason),
-						episode: index + 1
-					};
-				}
-			}
-			return { season: defaultSeason, episode: 1 };
-		})(videoParams, 1);
-
-		let episode = position.episode;
-		let season = position.season;
-
-		const isSerial = card.number_of_seasons > 0 || (card.original_name && !card.original_title);
-		if (!isSerial) {
-			season = 1;
-			episode = 1;
-		}
-
+		const cardId = getCardId(card);
+		const currentOffset = getOffset(cardId);
+		[videoParams].concat(playlist).forEach((item) => {
+			const segments = item && item.segments && segmentSources.get(item.segments.skip);
+			if (segments) setSegments(item, segments, currentOffset);
+		});
 		if (hasExistingSegments(videoParams)) return;
 
+		const index = playlist.findIndex((item) => item && (item === videoParams || (item.url && item.url === videoParams.url)));
+		const fallback = index < 0 ? { season: 1, episode: 1 } : getPosition(playlist[index], 1, index + 1);
+		const position = getPosition(videoParams, fallback.season, fallback.episode);
+		const isSerial = card.number_of_seasons > 0 || (card.original_name && !card.original_title);
+		const season = isSerial ? position.season : 1;
+		const episode = isSerial ? position.episode : 1;
+		const kpId = card.kinopoisk_id || (card.source === "kinopoisk" ? card.id : null) || card.kp_id;
 		let finalSegments = [];
-		let source = null;
-		const isAnime = isAnimeContent(card);
+		let dbData = null;
 
-		if (isAnime) {
-			let cleanName = card.original_name || card.original_title || card.name;
-			const searchTerm = cleanName
-				? cleanName
-					.replace(/\(\d{4}\)/g, "")
-					.replace(/\(TV\)/gi, "")
-					.replace(/Season \d+/gi, "")
-					.replace(/Part \d+/gi, "")
-					.replace(/[:\-]/g, " ")
-					.replace(/\s+/g, " ")
-					.trim()
-				: "";
+		if (isAnimeContent(card)) {
+			const searchTerm = String(card.original_name || card.original_title || card.name || "")
+				.replace(/\(\d{4}\)/g, "")
+				.replace(/\(TV\)/gi, "")
+				.replace(/Season \d+/gi, "")
+				.replace(/Part \d+/gi, "")
+				.replace(/[:\-]/g, " ")
+				.replace(/\s+/g, " ")
+				.trim();
+			const releaseYear = String(card.release_date || card.first_air_date || "0000").slice(0, 4);
 
-			const releaseYear = (card.release_date || card.first_air_date || "0000").slice(0, 4);
-
-			const malId = await searchMalId(searchTerm, season, releaseYear);
-
-			if (malId) {
-				const segmentsData = await fetchAniSkipSegments(malId, episode);
-				finalSegments = parseAniSkipSegments(segmentsData);
-				if (finalSegments.length > 0) {
-					source = "aniskip";
-				}
+			if (searchTerm) {
+				const malId = await searchMalId(searchTerm, season, releaseYear, isCurrent);
+				if (!isCurrent()) return;
+				if (malId) finalSegments = parseAniSkipSegments(await fetchAniSkipSegments(malId, episode));
 			}
 		}
 
-		if (finalSegments.length === 0 && kpId) {
-			const dbData = await fetchFromGitHub(kpId);
-			if (dbData) {
-				const segmentsData = getSegmentsFromDb(dbData, season, episode);
-				if (segmentsData && segmentsData.length > 0) {
-					finalSegments = segmentsData.slice();
-					source = "github";
-				}
-
-				if (videoParams.playlist && Array.isArray(videoParams.playlist)) {
-					videoParams.playlist.forEach((item) => {
-						if (hasExistingSegments(item)) return;
-
-						const itemSeason = item.season || item.s || season;
-						const itemEpisode = item.episode || item.e || item.episode_number;
-						if (itemSeason && itemEpisode) {
-							const itemSegments = getSegmentsFromDb(dbData, itemSeason, itemEpisode);
-							if (itemSegments) {
-								var cardId = getCardId(card);
-								var offset = getOffset(cardId);
-								item.segments = item.segments || {};
-								item.segments.skip = offset !== 0 ? applyOffset(itemSegments, offset) : itemSegments.slice();
-							}
-						}
-					});
-				}
-			}
+		if (!isCurrent()) return;
+		if (!finalSegments.length && kpId) {
+			dbData = await requestJson(GITHUB_DB_URL + encodeURIComponent(kpId) + ".json");
+			finalSegments = getSegmentsFromDb(dbData, season, episode);
 		}
+		if (!isCurrent()) return;
 
-		if (finalSegments.length > 0) {
-			var cardId = getCardId(card);
-			var offset = getOffset(cardId);
-			if (offset !== 0) {
-				finalSegments = applyOffset(finalSegments, offset);
-			}
+		const offset = getOffset(cardId);
+		playlist.forEach((item, index) => {
+			if (!item) return;
+			const position = getPosition(item, season, index + 1);
+			const segments = position.season === season && position.episode === episode && finalSegments.length
+				? finalSegments : getSegmentsFromDb(dbData, position.season, position.episode);
+			if (segments.length) setSegments(item, segments, offset);
+		});
 
-			videoParams.segments = videoParams.segments || {};
-			videoParams.segments.skip = finalSegments.slice();
-
-			updatePlaylist(videoParams.playlist, season, episode, finalSegments);
+		if (finalSegments.length && setSegments(videoParams, finalSegments, offset)) {
 			Lampa.Noty.show("Таймкоды загружены: Сезон " + season + ", Серия " + episode);
 		}
 	}
@@ -453,18 +303,14 @@
 		Lampa.Select.listener.follow("preshow", function (event) {
 			var active = Lampa.Activity.active();
 
-			var componentName = active && active.component ? active.component.toLowerCase() : "";
-			if (
-				!active ||
-				!active.component ||
-				(componentName !== "lamponline" && componentName !== "lampacskaz")
-			) {
+			var componentName = active && typeof active.component === "string" ? active.component.toLowerCase() : "";
+			if (componentName !== "lamponline" && componentName !== "lampacskaz") {
 				return;
 			}
 
 			var menu = event.active;
 
-			if (menu.title !== Lampa.Lang.translate("title_filter")) {
+			if (!menu || !Array.isArray(menu.items) || menu.title !== Lampa.Lang.translate("title_filter")) {
 				return;
 			}
 
@@ -476,7 +322,6 @@
 			}
 
 			var currentOffset = getOffset(cardId);
-			var offsetText = currentOffset === 0 ? "0" : (currentOffset > 0 ? "+" + currentOffset : String(currentOffset));
 
 			var offsetItem = menu.items.find(function (item) {
 				return item.stype === "ultimate_skip_offset";
@@ -490,7 +335,7 @@
 				menu.items.push(offsetItem);
 			}
 
-			offsetItem.subtitle = offsetText + " " + Lampa.Lang.translate("ultimate_skip_offset_sec");
+			offsetItem.subtitle = formatOffset(currentOffset);
 			offsetItem.onSelect = function () {
 				menu.items.forEach(function (item) {
 					item.selected = item === offsetItem;
@@ -500,16 +345,14 @@
 					Lampa.Select.show(menu);
 				}
 
-				var items = [];
 				var values = [-30, -20, -15, -10, -5, -3, -2, -1, 0, 1, 2, 3, 5, 10, 15, 20, 30];
 
-				values.forEach(function (val) {
-					var label = val === 0 ? "0" : (val > 0 ? "+" + val : String(val));
-					items.push({
-						title: label + " " + Lampa.Lang.translate("ultimate_skip_offset_sec"),
+				var items = values.map(function (val) {
+					return {
+						title: formatOffset(val),
 						value: val,
 						selected: val === currentOffset
-					});
+					};
 				});
 
 				Lampa.Select.show({
@@ -518,12 +361,16 @@
 					onBack: returnToFilter,
 					onSelect: function (item) {
 						setOffset(cardId, item.value);
-						Lampa.Noty.show(Lampa.Lang.translate("ultimate_skip_offset") + ": " + (item.value === 0 ? "0" : (item.value > 0 ? "+" + item.value : item.value)) + " " + Lampa.Lang.translate("ultimate_skip_offset_sec"));
+						Lampa.Noty.show(Lampa.Lang.translate("ultimate_skip_offset") + ": " + formatOffset(item.value));
 						returnToFilter();
 					}
 				});
 			};
 		});
+	}
+
+	function formatOffset(value) {
+		return (value > 0 ? "+" + value : String(value)) + " " + Lampa.Lang.translate("ultimate_skip_offset_sec");
 	}
 
 	function init() {
@@ -532,44 +379,51 @@
 
 		initOffsetFilterMenu();
 
-		const originalPlay = Lampa.Player.play;
-		const originalPlaylist = Lampa.Player.playlist;
-		let pendingPlaylist = null;
+		let generation = 0;
+		let resuming = null;
 
-		Lampa.Player.playlist = function (playlist) {
-			pendingPlaylist = playlist;
-			originalPlaylist.call(this, playlist);
-		};
+		Lampa.Player.listener.follow("destroy", function () {
+			generation++;
+		});
 
-		Lampa.Player.play = function (videoParams) {
-			const context = this;
+		Lampa.Player.listener.follow("create", function (event) {
+			const videoParams = event.data;
+			if (videoParams === resuming) return;
+			const token = ++generation;
+			const active = Lampa.Activity.active();
+			const card = videoParams.movie || videoParams.card || (active && (active.movie || active.card));
+			if (!card) return;
+			const isCurrent = () => token === generation && Lampa.Activity.active() === active;
 
-			if (videoParams.url) {
-				Lampa.PlayerPlaylist.url(videoParams.url);
-			}
+			event.abort();
 
-			if (videoParams.playlist && videoParams.playlist.length > 0) {
-				Lampa.PlayerPlaylist.set(videoParams.playlist);
-			}
-
-			searchAndApply(videoParams)
-				.then(() => {
-					originalPlay.call(context, videoParams);
-
-					if (pendingPlaylist) {
-						Lampa.PlayerPlaylist.set(pendingPlaylist);
-						pendingPlaylist = null;
-					}
-				})
-				.catch((e) => {
-					originalPlay.call(context, videoParams);
-				});
-		};
+			Promise.resolve().then(() => {
+				const playlist = Array.isArray(videoParams.playlist) && videoParams.playlist.length
+					? videoParams.playlist : Lampa.PlayerPlaylist.get();
+				return searchAndApply(videoParams, card, Array.isArray(playlist) ? playlist : [], isCurrent);
+			}).catch((error) => {
+				console.error("UltimateSkip", error);
+			}).then(() => {
+				if (!isCurrent()) return;
+				resuming = videoParams;
+				try {
+					Lampa.Player.play(videoParams);
+				} finally {
+					resuming = null;
+				}
+			}).catch((error) => {
+				console.error("UltimateSkip", error);
+			});
+		});
 	}
 
-	if (window.Lampa && window.Lampa.Player) {
+	if (window.appready) {
 		init();
 	} else {
-		window.document.addEventListener("app_ready", init);
+		Lampa.Listener.follow("app", function onReady(event) {
+			if (event.type !== "ready") return;
+			Lampa.Listener.remove("app", onReady);
+			init();
+		});
 	}
 })();
