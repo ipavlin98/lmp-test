@@ -2803,7 +2803,6 @@
 					title: title,
 					subtitle: balanser === REZKA_SOURCE ? $("<span>").text(items[value] || "").html() : items[value],
 					items: subitems,
-					noselect: true,
 					stype: type
 				});
 			};
@@ -2815,12 +2814,11 @@
 			select.push({
 				title: Lampa.Lang.translate("lampac_server_short"),
 				subtitle: getCurrentServerDisplay(),
-				noselect: true,
+				selected: true,
 				stype: "server"
 			});
 			select.push({
 				title: Lampa.Lang.translate("settings_rest_source"),
-				noselect: true,
 				stype: "source"
 			});
 			this.saveChoice(choice);
@@ -2836,7 +2834,6 @@
 					{ title: "hls.js", value: "hlsjs", selected: getHlsType() === "hlsjs" },
 					{ title: "Системная", value: "native", selected: getHlsType() === "native" }
 				],
-				noselect: true,
 				stype: "hls"
 			});
 			filter.set("filter", select);
