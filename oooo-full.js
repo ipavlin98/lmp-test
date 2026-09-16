@@ -684,7 +684,9 @@
 			var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
 			rezkaSession = {
 				key: key, serial: ++rezkaSerial, host: host, proxy: proxy, android: android,
-				cookie: saved && saved.key === key ? String(saved.cookie || '') : '', confirmed: false
+				cookie: saved && saved.key === key ? String(saved.cookie || '') : '', confirmed: false,
+				userId: saved && saved.key === key ? String(saved.userId || '') : '',
+				email: saved && saved.key === key ? String(saved.email || '') : ''
 			};
 		}
 		return rezkaSession;
@@ -697,13 +699,15 @@
 
 	function rezkaRemember(ctx) {
 		if (ctx === rezkaSession && ctx.confirmed) {
-			Lampa.Storage.set(REZKA_SOURCE + '_session', {key: ctx.key, cookie: ctx.cookie});
+			Lampa.Storage.set(REZKA_SOURCE + '_session', {key: ctx.key, cookie: ctx.cookie, userId: ctx.userId, email: ctx.email});
 		}
 	}
 
 	function rezkaForget(ctx) {
 		ctx.confirmed = false;
 		ctx.cookie = '';
+		ctx.userId = '';
+		ctx.email = '';
 		if (ctx === rezkaSession) Lampa.Storage.set(REZKA_SOURCE + '_session', {});
 	}
 
@@ -841,8 +845,23 @@
 				return;
 			}
 			ctx.confirmed = true;
-			rezkaRemember(ctx);
-			success();
+			var member = doc.querySelector('#member_user_id');
+			var userId = member ? member.value.trim() : '';
+			function complete() {
+				rezkaRemember(ctx);
+				success();
+			}
+			if (ctx.email && userId && ctx.userId === userId) { complete(); return; }
+			ctx.userId = userId;
+			ctx.email = '';
+			var profile = /^\d+$/.test(userId) ? '/user/' + userId + '/' : '/settings/';
+			rezkaRequest(network, ctx, ctx.host + profile, false, false, alive, function (html) {
+				var email = rezkaDocument(html).querySelector('form#userinfo input[name="email"]');
+				if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value.trim())) ctx.email = email.value.trim();
+				complete();
+			}, function (message) {
+				if (ctx.confirmed) complete(); else error(message);
+			});
 		}, error);
 	}
 
@@ -857,9 +876,10 @@
 			var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
 			var cookies = ctx && (ctx.android || ctx.proxy);
 			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в HDRezka' : saved && saved.key === ctx.key ? 'Вход сохранён. Нажмите «Проверить вход» для проверки' : 'Вход не выполнен');
+			settingsBody.find('.rezka-account-email').text(ctx && ctx.confirmed ? ctx.email || 'Не удалось получить почту аккаунта' : '').toggleClass('hide', !ctx || !ctx.confirmed);
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_do_login"] .settings-param__name').text(cookies ? 'Войти в HDRezka и сохранить куки' : 'Войти в HDRezka');
-			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"]').toggleClass('hide', !cookies);
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__value').text(ctx && ctx.cookie ? 'Куки сохранены' : 'Не заданы');
+			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__descr').text(cookies ? 'Вставьте строку вида dle_user_id=...; dle_password=...; имя=значение. Вход проверится и сохранится автоматически.' : 'Для входа по куки в браузере укажите прокси ниже. В Android Lampa 339+ прокси не нужен.');
 		}
 		function notice(message, success) {
 			if (activeStatus) activeStatus.removeClass('active error wait').addClass(success ? 'active' : 'error');
@@ -902,7 +922,7 @@
 			if (e.name === REZKA_SOURCE + '_login_name' || e.name === REZKA_SOURCE + '_login_password') stop();
 		});
 
-		var tmpl = '<div><div class="settings-param"><div class="settings-param__name">Аккаунт HDRezka</div><div class="settings-param__value rezka-account-state"></div></div>';
+		var tmpl = '<div><div class="settings-param"><div class="settings-param__name">Аккаунт HDRezka</div><div class="settings-param__value rezka-account-state"></div><div class="settings-param__descr rezka-account-email hide"></div></div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_mirror" data-type="input" placeholder="https://kvk.zone">';
 		tmpl += '<div class="settings-param__name">Зеркало HDRezka</div>';
 		tmpl += '<div class="settings-param__value"></div>';
@@ -920,6 +940,12 @@
 		tmpl += '<div class="settings-param__name">Войти в HDRezka</div>';
 		tmpl += '<div class="settings-param__status"></div>';
 		tmpl += '<div class="settings-param__descr">Введите логин и пароль выше, затем нажмите здесь. Вход сохраняется для выбранного зеркала.</div>';
+		tmpl += '</div>';
+		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_cookie" data-static="true">';
+		tmpl += '<div class="settings-param__name">Войти по куки</div>';
+		tmpl += '<div class="settings-param__value"></div>';
+		tmpl += '<div class="settings-param__status"></div>';
+		tmpl += '<div class="settings-param__descr"></div>';
 		tmpl += '</div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_check" data-static="true">';
 		tmpl += '<div class="settings-param__name">Проверить вход</div>';
@@ -939,12 +965,6 @@
 		tmpl += '<div class="settings-param__name">Прокси для HDRezka</div>';
 		tmpl += '<div class="settings-param__value"></div>';
 		tmpl += '<div class="settings-param__descr">Если зеркало не открывается напрямую, укажите HTTPS-адрес веб-прокси с поддержкой enc2 и cookie_plus, например https://proxy.example.com/. Обычные HTTP/SOCKS-прокси и адреса вида IP:порт не подходят. Через этот сервер также передаются логин, пароль и куки HDRezka. Оставьте поле пустым для подключения без прокси.</div>';
-		tmpl += '</div>';
-		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_cookie" data-static="true">';
-		tmpl += '<div class="settings-param__name">Куки HDRezka</div>';
-		tmpl += '<div class="settings-param__value"></div>';
-		tmpl += '<div class="settings-param__status"></div>';
-		tmpl += '<div class="settings-param__descr">Можно вставить куки из браузера. При входе по логину и паролю заполняются автоматически.</div>';
 		tmpl += '</div>';
 		tmpl += '</div>';
 		Lampa.Template.add('settings_lamponline_rezka', tmpl);
@@ -987,6 +1007,8 @@
 				var candidate = $.extend({}, ctx);
 				candidate.cookie = '';
 				candidate.confirmed = false;
+				candidate.userId = '';
+				candidate.email = '';
 				candidate.serial = ++rezkaSerial;
 				var data = {login_name: name, login_password: password, login_not_save: 0};
 				var alive = function () { return current(ctx, token); };
@@ -1013,7 +1035,7 @@
 				stop();
 				var ctx = context(), token = revision;
 				if (!ctx) return;
-				if (!ctx.android && !ctx.proxy) { notice('Браузер запрещает заголовок Cookie. Используйте вход либо явно настройте доверенный прокси.'); return; }
+				if (!ctx.android && !ctx.proxy) { notice('Для входа по куки укажите прокси в настройках ниже или используйте Android Lampa 339+.'); return; }
 				var item = this;
 				Lampa.Input.edit({title: 'Куки HDRezka', value: ctx.cookie, placeholder: 'имя=значение; имя=значение', nosave: true, free: true, nomic: true}, function (value) {
 					if (value == null || !current(ctx, token)) return;
@@ -1024,12 +1046,19 @@
 						notice('Куки HDRezka удалены.', true);
 						return;
 					}
-					if (/[\r\n]/.test(value) || !value.split(';').every(function (part) { return /^\s*[!#$%&'*+.^_`|~0-9A-Za-z-]+=[^;]*$/.test(part); })) {
+					value = value.trim().replace(/^Cookie:\s*/i, '');
+					var parts = value.split(';').map(function (part) {
+						var pos = part.indexOf('=');
+						return pos < 0 ? part.trim() : part.slice(0, pos).trim().replace(/\\_/g, '_') + '=' + part.slice(pos + 1).trim();
+					}).filter(function (part) { return part; });
+					if (/[\r\n]/.test(value) || !parts.length || !parts.every(function (part) { return /^[!#$%&'*+.^_`|~0-9A-Za-z-]+=[\x21-\x3A\x3C-\x7E]*$/.test(part); })) {
 						notice('Некорректная cookie: нужны пары имя=значение без переноса строк.'); return;
 					}
 					var candidate = $.extend({}, ctx);
-					candidate.cookie = value.trim();
+					candidate.cookie = parts.join('; ');
 					candidate.confirmed = false;
+					candidate.userId = '';
+					candidate.email = '';
 					candidate.serial = ++rezkaSerial;
 					rezkaVerify(network, candidate, function () { return current(ctx, token); }, function () {
 						rezkaSession = candidate;
