@@ -1812,7 +1812,7 @@
 					}
 					else if (a.stype === "source") {
 						Lampa.Select.show({
-							title: Lampa.Lang.translate("filter_sorted"),
+							title: Lampa.Lang.translate("lampac_balanser"),
 							items: sourceItems(),
 							onSelect: onSortSelect,
 							onBack: function () {
