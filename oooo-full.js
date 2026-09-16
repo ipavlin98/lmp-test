@@ -868,7 +868,7 @@
 	function initRezkaSettings() {
 		if (rezkaSettingsReady) return;
 		rezkaSettingsReady = true;
-		var network = new Lampa.Reguest(), revision = 0, settingsBody, activeStatus;
+		var network = new Lampa.Reguest(), revision = 0, settingsBody, activeStatus, statusTimer;
 		function refresh() {
 			if (!settingsBody) return;
 			var ctx;
@@ -879,11 +879,17 @@
 			settingsBody.find('.rezka-account-email').text(ctx && ctx.confirmed ? ctx.email || 'Не удалось получить почту аккаунта' : '').toggleClass('hide', !ctx || !ctx.confirmed);
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_do_login"] .settings-param__name').text(cookies ? 'Войти в HDRezka и сохранить куки' : 'Войти в HDRezka');
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__value').text(ctx && ctx.cookie ? 'Куки сохранены' : 'Не заданы');
-			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__descr').text(cookies ? 'Вставьте строку вида dle_user_id=...; dle_password=...; имя=значение. Вход проверится и сохранится автоматически.' : 'Для входа по куки в браузере укажите прокси ниже. В Android Lampa 339+ прокси не нужен.');
+			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__descr').text(cookies ? 'Вставьте строку вида dle_user_id=...; dle_password=...; имя=значение. Вход проверится и сохранится автоматически.' : 'В Tizen и браузере импорт куки требует прокси. Вход по логину и паролю использует куки, которые сайт сохраняет сам.');
 		}
 		function notice(message, success) {
-			if (activeStatus) activeStatus.removeClass('active error wait').addClass(success ? 'active' : 'error');
-			activeStatus = null;
+			if (activeStatus) {
+				activeStatus.removeClass('active error wait').addClass(success ? 'active' : 'error');
+				clearTimeout(statusTimer);
+				statusTimer = setTimeout(function () {
+					activeStatus.removeClass('active error');
+					activeStatus = null;
+				}, 12000);
+			}
 			refresh();
 			var text = document.createElement('span');
 			text.textContent = String(message || '');
@@ -892,7 +898,8 @@
 		function stop() {
 			revision++;
 			network.clear();
-			if (activeStatus) activeStatus.removeClass('wait');
+			clearTimeout(statusTimer);
+			if (activeStatus) activeStatus.removeClass('active error wait');
 			activeStatus = null;
 		}
 		function begin(item) {
