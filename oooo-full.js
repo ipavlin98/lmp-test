@@ -690,7 +690,7 @@
 				key: key, serial: ++rezkaSerial, host: host, proxy: proxy, android: android,
 				cookie: saved && saved.key === key ? String(saved.cookie || '') : '', confirmed: false,
 				userId: saved && saved.key === key ? String(saved.userId || '') : '',
-				email: saved && saved.key === key ? String(saved.email || '') : ''
+				email: saved && saved.key === key ? String(saved.email || '') : '', premiumDays: null
 			};
 		}
 		return rezkaSession;
@@ -712,6 +712,7 @@
 		ctx.cookie = '';
 		ctx.userId = '';
 		ctx.email = '';
+		ctx.premiumDays = null;
 		if (ctx === rezkaSession) Lampa.Storage.set(REZKA_SOURCE + '_session', {});
 	}
 
@@ -862,6 +863,9 @@
 				return;
 			}
 			ctx.confirmed = true;
+			var premium = doc.querySelector('.b-tophead-premuser');
+			var days = rezkaText(premium).match(/(?:^|\s)(\d+)\s*(?:дней|день|дня|днів|дні|дн\.?|days?)(?=\s|$|[.,;:!?)])/i);
+			ctx.premiumDays = days ? Number(days[1]) : doc.querySelector('body.b-premium_user__body') || premium ? null : 0;
 			var member = doc.querySelector('#member_user_id');
 			var userId = member ? member.value.trim() : '';
 			function complete() {
@@ -892,8 +896,8 @@
 			try { ctx = rezkaContext(); } catch (e) {}
 			var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
 			var cookies = ctx && (ctx.android || ctx.proxy);
-			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в HDRezka' : saved && saved.key === ctx.key ? 'Вход сохранён. Нажмите «Проверить вход» для проверки' : 'Вход не выполнен');
-			settingsBody.find('.rezka-account-email').text(ctx && ctx.confirmed ? ctx.email || 'Не удалось получить почту аккаунта' : '').toggleClass('hide', !ctx || !ctx.confirmed);
+			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в аккаунт' : saved && saved.key === ctx.key ? 'Вход сохранён. Нажмите «Проверить вход» для проверки' : 'Вход не выполнен');
+			settingsBody.find('.rezka-account-email').text(ctx && ctx.confirmed ? (ctx.email || 'Не удалось получить почту аккаунта') + ' | ' + (ctx.premiumDays === null ? 'срок неизвестен' : ctx.premiumDays + ' дн.') : '').toggleClass('hide', !ctx || !ctx.confirmed);
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_do_login"] .settings-param__name').text(cookies ? 'Войти в HDRezka и сохранить куки' : 'Войти в HDRezka');
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__value').text(ctx && ctx.cookie ? 'Куки сохранены' : 'Не заданы');
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__descr').text(cookies ? 'Вставьте строку вида dle_user_id=...; dle_password=...; имя=значение. Вход проверится и сохранится автоматически.' : 'В Tizen и браузере импорт куки требует прокси. Вход по логину и паролю использует куки, которые сайт сохраняет сам.');
