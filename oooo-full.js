@@ -667,10 +667,14 @@
 		if (value.indexOf('://') === -1) value = 'https://' + value;
 		var link = document.createElement('a');
 		link.href = value;
-		if (link.protocol !== 'https:' || !link.hostname || link.username || link.password ||
+		var localProxy = proxy && link.protocol === 'http:' &&
+			/^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/.test(link.hostname);
+		if ((!proxy && link.protocol !== 'https:') ||
+			(proxy && link.protocol !== 'https:' && !localProxy) ||
+			!link.hostname || link.username || link.password ||
 			link.search || link.hash || /[\s\\]/.test(value) ||
 			(!proxy && link.pathname !== '/' && link.pathname !== '')) {
-			throw new Error(proxy ? 'Укажите доверенный HTTPS-прокси без логина, query и фрагмента.' : 'Укажите HTTPS-адрес зеркала без пути, логина и параметров.');
+			throw new Error(proxy ? 'Укажите доверенный HTTPS-прокси или HTTP-прокси в локальной сети без логина, query и фрагмента.' : 'Укажите HTTPS-адрес зеркала без пути, логина и параметров.');
 		}
 		return (link.protocol + '//' + link.host + (proxy ? link.pathname : '')).replace(/\/+$/, '') + (proxy ? '/' : '');
 	}
@@ -772,14 +776,24 @@
 
 	function rezkaRequest(network, ctx, url, data, json, alive, success, error) {
 		var headers = {}, target, wrapped = !!(ctx.proxy || ctx.android);
+		var requestData = data && typeof data === 'object' ? $.param(data) : data || false;
 		try {
 			target = rezkaPageUrl(url, ctx);
 			var agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
 			if (ctx.proxy) {
-				var params = 'param/Origin=' + encodeURIComponent(ctx.host) + '/param/Referer=' + encodeURIComponent(ctx.host + '/') +
-					'/param/User-Agent=' + encodeURIComponent(agent) + '/cookie_plus/param/Cookie=' + encodeURIComponent(ctx.cookie) + '/';
-				var name = target.split('?')[0].split('/').pop().replace(/\.(php|asp|aspx|jsp|cgi|pl|py|rb)$/, '.txt');
-				target = ctx.proxy + 'enc2/' + encodeURIComponent(btoa(params + target)) + '/' + name + '?jacred.test';
+				var proxyPayload = {
+					url: target,
+					method: requestData ? 'POST' : 'GET',
+					body: requestData || '',
+					headers: {
+						Origin: ctx.host,
+						Referer: ctx.host + '/',
+						'User-Agent': agent,
+						Cookie: ctx.cookie || ''
+					}
+				};
+				target = ctx.proxy + 'request';
+				requestData = 'payload=' + encodeURIComponent(JSON.stringify(proxyPayload));
 			} else if (ctx.android) {
 				headers = {'Origin': ctx.host, 'Referer': ctx.host + '/', 'User-Agent': agent};
 				if (ctx.cookie) headers.Cookie = ctx.cookie;
@@ -826,7 +840,7 @@
 				error('Не удалось связаться с Rezka' + (xhr && xhr.status ? ' (HTTP ' + xhr.status + ')' : '') +
 					(status === 'timeout' ? ': время ожидания истекло.' : '. Проверьте зеркало, сеть и CORS; в браузере может потребоваться доверенный прокси.'));
 			}
-		}, data && typeof data === 'object' ? $.param(data) : data || false, {
+		}, requestData, {
 			dataType: 'text', headers: headers, withCredentials: !ctx.proxy && !ctx.android,
 			returnHeaders: ctx.android && !ctx.proxy
 		});
