@@ -1617,15 +1617,17 @@
 				}
 			}
 
-			function loadSubtitles(link) {
-				if (destroyed) return;
+			function loadSubtitles(link, playing) {
+				playing = playing || Lampa.Player.playdata();
+				if (destroyed || !playing) return;
 				var token = generation;
-				var playing = Lampa.Player.playdata();
 				network.silent(
 					account(link),
 					function (subs) {
-						if (destroyed || token !== generation || playing !== Lampa.Player.playdata()) return;
-						Lampa.Player.subtitles(subs);
+						if (destroyed || token !== generation || !Array.isArray(subs)) return;
+						playing.subtitles = subs;
+						if (playing === Lampa.Player.playdata() && Lampa.Player.opened() && Lampa.PlayerVideo.video())
+							Lampa.Player.subtitles(subs);
 					},
 					function (e) {
 						console.error(e);
@@ -2491,7 +2493,7 @@
 																	);
 																}
 																call();
-																if (cell.url && cell.subtitles_call) _this5.loadSubtitles(cell.subtitles_call);
+																if (cell.url && cell.subtitles_call) _this5.loadSubtitles(cell.subtitles_call, cell);
 															}
 														);
 													};
@@ -2514,7 +2516,7 @@
 									Lampa.Player.play(element);
 									Lampa.Player.playlist(playlist);
 									if (element.subtitles_call)
-										_this5.loadSubtitles(element.subtitles_call);
+										_this5.loadSubtitles(element.subtitles_call, element);
 									item.mark();
 									_this5.updateBalanser(balanser);
 								} else {
