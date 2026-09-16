@@ -888,7 +888,7 @@
 				statusTimer = setTimeout(function () {
 					activeStatus.removeClass('active error');
 					activeStatus = null;
-				}, 12000);
+				}, 5000);
 			}
 			refresh();
 			var text = document.createElement('span');
