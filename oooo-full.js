@@ -668,9 +668,9 @@
 		var link = document.createElement('a');
 		link.href = value;
 		var localProxy = proxy && link.protocol === 'http:' &&
-			/^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/.test(link.hostname);
-		if ((!proxy && link.protocol !== 'https:') ||
-			(proxy && link.protocol !== 'https:' && !localProxy) ||
+			/^(10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})$/.test(link.hostname) &&
+			link.hostname.split('.').every(function (part) { return Number(part) <= 255; });
+		if ((link.protocol !== 'https:' && !localProxy) ||
 			!link.hostname || link.username || link.password ||
 			link.search || link.hash || /[\s\\]/.test(value) ||
 			(!proxy && link.pathname !== '/' && link.pathname !== '')) {
@@ -775,32 +775,35 @@
 	}
 
 	function rezkaRequest(network, ctx, url, data, json, alive, success, error) {
-		var headers = {}, target, wrapped = !!(ctx.proxy || ctx.android);
-		var requestData = data && typeof data === 'object' ? $.param(data) : data || false;
+		var headers = {}, target, requestData, wrapped = !!(ctx.proxy || ctx.android);
+		var localProxy = ctx.proxy.indexOf('http://') === 0;
 		try {
 			target = rezkaPageUrl(url, ctx);
+			requestData = data && typeof data === 'object' ? $.param(data) : data || false;
 			var agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
-			if (ctx.proxy) {
-				var proxyPayload = {
+			if (localProxy) {
+				requestData = $.param({payload: JSON.stringify({
 					url: target,
 					method: requestData ? 'POST' : 'GET',
 					body: requestData || '',
 					headers: {
-						Origin: ctx.host,
-						Referer: ctx.host + '/',
 						'User-Agent': agent,
 						Cookie: ctx.cookie || ''
 					}
-				};
+				})});
 				target = ctx.proxy + 'request';
-				requestData = 'payload=' + encodeURIComponent(JSON.stringify(proxyPayload));
+			} else if (ctx.proxy) {
+				var params = 'param/Origin=' + encodeURIComponent(ctx.host) + '/param/Referer=' + encodeURIComponent(ctx.host + '/') +
+					'/param/User-Agent=' + encodeURIComponent(agent) + '/cookie_plus/param/Cookie=' + encodeURIComponent(ctx.cookie) + '/';
+				var name = target.split('?')[0].split('/').pop().replace(/\.(php|asp|aspx|jsp|cgi|pl|py|rb)$/, '.txt');
+				target = ctx.proxy + 'enc2/' + encodeURIComponent(btoa(params + target)) + '/' + name + '?jacred.test';
 			} else if (ctx.android) {
 				headers = {'Origin': ctx.host, 'Referer': ctx.host + '/', 'User-Agent': agent};
 				if (ctx.cookie) headers.Cookie = ctx.cookie;
 			}
 		} catch (e) { if (alive()) error(e.message); return; }
 		if (!alive()) return;
-		network.timeout(15000);
+		network.timeout(localProxy ? 30000 : 15000);
 		network[ctx.android ? 'native' : 'silent'](target, function (response) {
 			if (!alive()) return;
 			var body = response, issue = '';
@@ -808,7 +811,7 @@
 				if (wrapped) {
 					var envelope = typeof response === 'string' ? JSON.parse(response) : response;
 					if (!envelope || !Object.prototype.hasOwnProperty.call(envelope, 'body')) {
-						throw new Error('Транспорт не вернул заголовки: нужен Android Lampa 339+ либо прокси с cookie_plus.');
+						throw new Error('Неверный формат ответа: проверьте адрес и совместимость прокси; для прямого подключения нужен Android Lampa 339+.');
 					}
 					rezkaCookies(ctx, envelope.headers);
 					body = envelope.body;
@@ -984,8 +987,8 @@
 		tmpl += '<div class="settings-param-title"><span>Дополнительно</span></div>';
 		tmpl += '<div class="settings-param selector" data-name="' + REZKA_SOURCE + '_proxy" data-type="input" placeholder="Без прокси">';
 		tmpl += '<div class="settings-param__name">Прокси для HDRezka</div>';
-		tmpl += '<div class="settings-param__value"></div>';
-		tmpl += '<div class="settings-param__descr">Если зеркало не открывается напрямую, укажите HTTPS-адрес веб-прокси с поддержкой enc2 и cookie_plus, например https://proxy.example.com/. Обычные HTTP/SOCKS-прокси и адреса вида IP:порт не подходят. Через этот сервер также передаются логин, пароль и куки HDRezka. Оставьте поле пустым для подключения без прокси.</div>';
+		tmpl += '<div class="settings-param__value" style="white-space: normal; word-break: break-all;"></div>';
+		tmpl += '<div class="settings-param__descr">Укажите адрес HTTPS-прокси с поддержкой enc2 и cookie_plus. Через сервер передаются логин, пароль и куки HDRezka. Оставьте поле пустым для подключения без прокси.</div>';
 		tmpl += '</div>';
 		tmpl += '</div>';
 		Lampa.Template.add('settings_lamponline_rezka', tmpl);
@@ -1376,7 +1379,8 @@
 								if (previous && previous !== item.url) premium = false;
 								previous = item.url;
 							}
-							output.quality[item.label] = item.url;
+							var label = item.label === '4K' ? '2160p' : item.label === '2K' ? '1440p' : item.label === '1080p Ultra' ? '1080p' : item.label;
+							if (!output.quality[label]) output.quality[label] = item.url;
 						});
 						if (premium) throw new Error('Перевод доступен только с HDrezka Premium');
 						output.subtitles = rezkaPlaylist(json.subtitle).map(function (item) { return {label: item.label, url: item.links[0]}; });
