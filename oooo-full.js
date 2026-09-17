@@ -1436,7 +1436,7 @@
 
 		function getHlsType() {
 			var type = Lampa.Storage.get(Config.StorageKeys.OnlineHlsPrefix + balanser, "");
-			return type === "native" || type === "hlsjs" ? type : "";
+			return type === "native" || type === "hlsjs" || type === "auto" ? type : "";
 		}
 
 		var NetworkManager = (function () {
@@ -1648,7 +1648,8 @@
 					play.vast_screen = stream.vast.screen;
 				}
 				var hls_type = getHlsType();
-				if (hls_type) play.hls_type = hls_type;
+				if (hls_type === "auto") play.lamponline_hls_auto = true;
+				else if (hls_type) play.hls_type = hls_type;
 				return play;
 			}
 
@@ -2898,9 +2899,10 @@
 				add("season", Lampa.Lang.translate("torrent_serial_season"));
 			select.push({
 				title: "Обработка m3u8",
-				subtitle: getHlsType() === "native" ? "Системная" : getHlsType() === "hlsjs" ? "hls.js" : "Как в настройках Lampa",
+				subtitle: getHlsType() === "auto" ? "Автоматически" : getHlsType() === "native" ? "Системная" : getHlsType() === "hlsjs" ? "hls.js" : "Как в настройках Lampa",
 				items: [
 					{ title: "Как в настройках Lampa", value: "", selected: getHlsType() === "" },
+					{ title: "Автоматически", value: "auto", selected: getHlsType() === "auto" },
 					{ title: "hls.js", value: "hlsjs", selected: getHlsType() === "hlsjs" },
 					{ title: "Системная", value: "native", selected: getHlsType() === "native" }
 				],
@@ -3842,10 +3844,64 @@
 			player.listener === playerErrorListener) return;
 
 		var send = player.listener.send;
+		var url = player.url;
+		var attempt;
+		var retrying = false;
+
+		function clearAttempt() {
+			if (attempt) clearTimeout(attempt.timer);
+			attempt = null;
+		}
+
+		function retryHls() {
+			var failed = attempt;
+			if (!failed || failed.started || failed.retried || failed.data !== Lampa.Player.playdata()) return false;
+			if (failed.pending) return true;
+			failed.pending = true;
+			clearTimeout(failed.timer);
+			failed.timer = setTimeout(function () {
+				if (attempt !== failed || failed.data !== Lampa.Player.playdata()) return;
+				clearAttempt();
+				player.destroy(true);
+				failed.data.hls_type = failed.type === "native" ? "hlsjs" : "native";
+				retrying = true;
+				try {
+					player.url(failed.src);
+				} finally {
+					retrying = false;
+				}
+			}, 0);
+			return true;
+		}
+
+		player.url = function (src) {
+			clearAttempt();
+			var data = Lampa.Player.playdata();
+			if (data && data.lamponline_stream && data.lamponline_hls_auto && /\.m3u8/.test(src)) {
+				if (!retrying) data.hls_type = Lampa.Storage.field("player_hls_method") === "hlsjs" ? "hlsjs" : "native";
+				attempt = {
+					data: data,
+					src: src,
+					type: data.hls_type,
+					retried: retrying,
+					started: false,
+					pending: false
+				};
+				if (!retrying) attempt.timer = setTimeout(retryHls, Math.max(30000, Number(data.hls_manifest_timeout) || 0));
+			}
+			return url.apply(this, arguments);
+		};
+		Lampa.Player.listener.follow("destroy", clearAttempt);
 		player.listener.send = function (event, error) {
 			var data = Lampa.Player.playdata();
+			if (event === "destroy") clearAttempt();
+			if (event === "loadeddata" && attempt && attempt.data === data && !attempt.pending) {
+				attempt.started = true;
+				clearTimeout(attempt.timer);
+			}
 			if (event === "error" && error && error.fatal === false &&
 				data && data.lamponline_stream) return this;
+			if (event === "error" && error && error.fatal && retryHls()) return this;
 			return send.apply(this, arguments);
 		};
 		playerErrorListener = player.listener;
