@@ -898,7 +898,7 @@
 			try { ctx = rezkaContext(); } catch (e) {}
 			var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
 			var cookies = ctx && (ctx.android || ctx.proxy);
-			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в аккаунт' : saved && saved.key === ctx.key ? 'Вход сохранён. Нажмите «Проверить вход» для проверки' : 'Вход не выполнен');
+			settingsBody.find('.rezka-account-state').text(!ctx ? 'Проверьте адрес зеркала и прокси' : ctx.confirmed ? 'Вы вошли в аккаунт' : saved && saved.key === ctx.key ? 'Проверяем вход…' : 'Вход не выполнен');
 			settingsBody.find('.rezka-account-email').text(ctx && ctx.confirmed ? (ctx.email || 'Не удалось получить почту аккаунта') + ' | ' + (ctx.premiumDays === null ? 'срок неизвестен' : ctx.premiumDays + ' дн.') : '').toggleClass('hide', !ctx || !ctx.confirmed);
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_do_login"] .settings-param__name').text(cookies ? 'Войти в HDRezka и сохранить куки' : 'Войти в HDRezka');
 			settingsBody.find('[data-name="' + REZKA_SOURCE + '_cookie"] .settings-param__value').text(ctx && ctx.cookie ? 'Куки сохранены' : 'Не заданы');
@@ -1025,6 +1025,14 @@
 			if (e.name !== 'lamponline_rezka') return;
 			settingsBody = e.body;
 			refresh();
+			var ctx = context(), token = revision;
+			if (ctx) rezkaVerify(network, ctx, function () { return current(ctx, token); }, refresh, function (message) {
+				refresh();
+				var saved = Lampa.Storage.get(REZKA_SOURCE + '_session', {});
+				if (ctx.confirmed || saved && saved.key === ctx.key) {
+					settingsBody.find('.rezka-account-state').text('Не удалось проверить вход. ' + message);
+				}
+			});
 
 			e.body.find('[data-name="' + REZKA_SOURCE + '_do_login"]').unbind('hover:enter').on('hover:enter', function () {
 				begin(this);
