@@ -863,11 +863,11 @@
 				return;
 			}
 			ctx.confirmed = true;
-  		var premium = doc.querySelector('.b-tophead-premuser');
-  		var premiumText = premium ? String(premium.innerHTML || premium.textContent || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
-  		if (!premiumText) premiumText = rezkaText(premium);
-  		var days = premiumText.match(/(?:^|\s)(\d+)\s*(?:дней|день|дня|днів|дні|дн\.?|days?)(?=\s|$|[.,;:!?)])/i);
-  		ctx.premiumDays = days ? Number(days[1]) : (doc.querySelector('body.b-premium_user__body') || premium ? null : 0);
+			var premium = doc.querySelector('.b-tophead-premuser');
+			var premiumText = premium ? String(premium.innerHTML || premium.textContent || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : '';
+			if (!premiumText) premiumText = rezkaText(premium);
+			var days = premiumText.match(/(?:^|\s)(\d+)\s*(?:дней|день|дня|днів|дні|дн\.?|days?)(?=\s|$|[.,;:!?)])/i);
+			ctx.premiumDays = days ? Number(days[1]) : (doc.querySelector('body.b-premium_user__body') || premium ? null : 0);
 			var member = doc.querySelector('#member_user_id');
 			var userId = member ? member.value.trim() : '';
 			function complete() {
