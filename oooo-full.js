@@ -1474,11 +1474,11 @@
 			return error;
 		}
 
-		function lastRequest(network) {
+		function cancelRequests(network) {
 			pendingRequests.slice().forEach(function (cancel) {
 				if (cancel.network === network) cancel();
 			});
-			network.last();
+			network.clear();
 		}
 
 		function clearNetworks() {
@@ -1575,7 +1575,7 @@
 			}
 
 			function silentPromise(network, url, data, options) {
-				lastRequest(network);
+				cancelRequests(network);
 				return new Promise(function (resolve, reject) {
 					function finish(error, json) {
 						var index = pendingRequests.indexOf(cancel);
@@ -1777,7 +1777,7 @@
 				playing = playing || Lampa.Player.playdata();
 				if (destroyed || !playing) return;
 				var token = generation;
-				subtitleNetwork.last();
+				subtitleNetwork.clear();
 				subtitleNetwork.silent(
 					account(link),
 					function (subs) {
@@ -2415,7 +2415,7 @@
 			if (typeof url !== "string" || !url) return this.doesNotAnswer();
 			number_of_requests++;
 			var finalUrl = account(url);
-			lastRequest(sourceNetwork);
+			cancelRequests(sourceNetwork);
 
 			if (number_of_requests < 10) {
 				sourceNetwork["native"](
@@ -2570,7 +2570,7 @@
 					Lampa.Controller.toggle("content");
 					streamNetwork.clear();
 				});
-				lastRequest(streamNetwork);
+				cancelRequests(streamNetwork);
 				streamNetwork["native"](
 					account(file.url),
 					function (json) {
