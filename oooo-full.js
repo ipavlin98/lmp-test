@@ -203,6 +203,12 @@
 		return Boolean(getServerUrl());
 	}
 
+	function safeUiText(value) {
+		var element = document.createElement("span");
+		element.textContent = value == null ? "" : String(value);
+		return element.innerHTML;
+	}
+
 	function formatServerDisplay(url) {
 		var displayName = (typeof url === "string" ? url : "").replace(/^https?:\/\//, "");
 		var country = getServerCountry(url);
@@ -1735,7 +1741,10 @@
 					play.vast_screen = stream.vast.screen;
 				}
 				var hls_type = getHlsType();
-				if (hls_type === "auto") play.lamponline_hls_auto = true;
+				if (hls_type === "auto") {
+					play.lamponline_hls_auto = true;
+					play.hls_type = Lampa.Storage.field("player_hls_method") === "hlsjs" ? "hlsjs" : "native";
+				}
 				else if (hls_type) play.hls_type = hls_type;
 				return play;
 			}
@@ -1964,7 +1973,7 @@
 					else if (a.stype === "server") {
 						openServerMenu(function () {
 							serverBtn.find("div").text(getCurrentServerDisplay());
-							a.subtitle = getCurrentServerDisplay();
+							a.subtitle = safeUiText(getCurrentServerDisplay());
 						}, function () {
 							if (!destroyed) filter.show(Lampa.Lang.translate("title_filter"), "filter");
 						});
@@ -2163,7 +2172,7 @@
 		function sourceItems() {
 			var items = filter_sources.map(function (name) {
 				return {
-					title: sources[name].name,
+					title: safeUiText(sources[name].name),
 					source: name,
 					selected: name == balanser,
 					ghost: !sources[name].show
@@ -2186,7 +2195,7 @@
 			filter.get("filter").forEach(function (item) {
 				if (item.stype === "source") {
 					item.hide = !filter_sources.length;
-					item.subtitle = sources[balanser] ? sources[balanser].name : balanser;
+					item.subtitle = safeUiText(sources[balanser] ? sources[balanser].name : balanser);
 				}
 			});
 		}
@@ -2294,7 +2303,7 @@
 							filter_sources = Lampa.Arrays.getKeys(sources);
 							updateSourceItems();
 							filter.chosen("sort", [
-								sources[balanser] ? sources[balanser].name : balanser
+								safeUiText(sources[balanser] ? sources[balanser].name : balanser)
 							]);
 
 							tryResolve(json, false);
@@ -2956,14 +2965,14 @@
 				var value = need[type];
 				items.forEach(function (name, i) {
 					subitems.push({
-						title: balanser === REZKA_SOURCE ? $("<span>").text(name).html() : name,
+						title: safeUiText(name),
 						selected: value == i,
 						index: i
 					});
 				});
 				select.push({
 					title: title,
-					subtitle: balanser === REZKA_SOURCE ? $("<span>").text(items[value] || "").html() : items[value],
+					subtitle: safeUiText(items[value]),
 					items: subitems,
 					stype: type
 				});
@@ -2975,7 +2984,7 @@
 			});
 			select.push({
 				title: Lampa.Lang.translate("lampac_server_short"),
-				subtitle: getCurrentServerDisplay(),
+				subtitle: safeUiText(getCurrentServerDisplay()),
 				selected: true,
 				stype: "server"
 			});
@@ -3001,7 +3010,7 @@
 			});
 			filter.set("filter", select);
 			updateSourceItems();
-			filter.chosen("server", [getCurrentServerDisplay()]);
+			filter.chosen("server", [safeUiText(getCurrentServerDisplay())]);
 			this.selected(filter_items);
 		};
 
@@ -3011,18 +3020,18 @@
 			for (var i in need) {
 				if (filter_items[i] && filter_items[i].length) {
 					if (i == "voice") {
-						select.push(filter_translate[i] + ": " + filter_items[i][need[i]]);
+						select.push(filter_translate[i] + ": " + safeUiText(filter_items[i][need[i]]));
 					} else if (i !== "source") {
 						if (filter_items.season.length >= 1) {
 							select.push(
-								filter_translate.season + ": " + filter_items[i][need[i]]
+								filter_translate.season + ": " + safeUiText(filter_items[i][need[i]])
 							);
 						}
 					}
 				}
 			}
 			filter.chosen("filter", select);
-			filter.chosen("sort", [sources[balanser] ? sources[balanser].name : balanser === REZKA_SOURCE ? "Rezka" : balanser]);
+			filter.chosen("sort", [sources[balanser] ? safeUiText(sources[balanser].name) : balanser === REZKA_SOURCE ? "Rezka" : safeUiText(balanser)]);
 		};
 
 		this.getEpisodes = function (season, call) {
@@ -3511,7 +3520,7 @@
 										var qual = [];
 										for (var i in extra.quality) {
 											qual.push({
-												title: i,
+												title: safeUiText(i),
 												file: extra.quality[i]
 											});
 										}
@@ -3934,9 +3943,7 @@
 		}
 
 		var send = player.listener.send;
-		var url = player.url;
 		var attempt;
-		var retrying = false;
 
 		function clearAttempt() {
 			if (attempt) clearTimeout(attempt.timer);
@@ -3954,41 +3961,36 @@
 				clearAttempt();
 				player.destroy(true);
 				failed.data.hls_type = failed.type === "native" ? "hlsjs" : "native";
-				retrying = true;
-				try {
-					player.url(failed.src);
-				} finally {
-					retrying = false;
-				}
+				attempt = failed;
+				failed.retried = true;
+				failed.pending = false;
+				player.url(failed.src);
 			}, 0);
 			return true;
 		}
 
-		var patchedUrl = player.url = function (src) {
-			clearAttempt();
-			var data = Lampa.Player.playdata();
-			if (data && data.lamponline_stream && data.lamponline_hls_auto && /\.m3u8/.test(src)) {
-				if (!retrying) data.hls_type = Lampa.Storage.field("player_hls_method") === "hlsjs" ? "hlsjs" : "native";
-				attempt = {
-					data: data,
-					src: src,
-					type: data.hls_type,
-					retried: retrying,
-					started: false,
-					pending: false
-				};
-				if (!retrying) attempt.timer = setTimeout(retryHls, Math.max(30000, Number(data.hls_manifest_timeout) || 0));
-			}
-			return url.apply(this, arguments);
-		};
+		if (data.lamponline_hls_auto && /\.m3u8/.test(data.url)) {
+			attempt = {
+				data: data,
+				src: data.url,
+				type: data.hls_type,
+				retried: false,
+				started: false,
+				pending: false
+			};
+			attempt.timer = setTimeout(retryHls, Math.max(30000, Number(data.hls_manifest_timeout) || 0));
+		}
 		var listener = player.listener;
-		var patchedSend = listener.send = function (event, error) {
-			var data = Lampa.Player.playdata();
-			if (event === "destroy") clearAttempt();
-			if (event === "loadeddata" && attempt && attempt.data === data && !attempt.pending) {
+		function onLoadedData() {
+			if (attempt && attempt.data === Lampa.Player.playdata() && !attempt.pending) {
 				attempt.started = true;
 				clearTimeout(attempt.timer);
 			}
+		}
+		listener.follow("loadeddata", onLoadedData);
+		listener.follow("destroy", clearAttempt);
+		var patchedSend = listener.send = function (event, error) {
+			var data = Lampa.Player.playdata();
 			if (event === "error" && error && error.fatal === false &&
 				data && data.lamponline_stream) return this;
 			if (event === "error" && error && error.fatal && retryHls()) return this;
@@ -3997,7 +3999,8 @@
 		restorePlayerBuffer = function () {
 			clearAttempt();
 			if (patchedLoadSource && prototype.loadSource === patchedLoadSource) prototype.loadSource = loadSource;
-			if (player.url === patchedUrl) player.url = url;
+			listener.remove("loadeddata", onLoadedData);
+			listener.remove("destroy", clearAttempt);
 			if (listener.send === patchedSend) listener.send = send;
 			restorePlayerBuffer = null;
 		};
@@ -4568,7 +4571,7 @@
 		}
 
 		Lampa.Select.show({
-			title: serverName,
+			title: safeUiText(serverName),
 			items: items,
 			onBack: function () {
 				Lampa.Controller.toggle(enabled);
@@ -4710,7 +4713,7 @@
 
 		servers.forEach(function (server, index) {
 			items.push({
-				title: formatServerDisplay(server),
+				title: safeUiText(formatServerDisplay(server)),
 				index: index,
 				selected: index === activeIndex
 			});
@@ -4731,7 +4734,7 @@
 				} else if (item.selected) {
 					var displayName = formatServerDisplay(servers[item.index]);
 					Lampa.Select.show({
-						title: displayName,
+						title: safeUiText(displayName),
 						items: [
 							{
 								title: Lampa.Lang.translate("lampac_edit_server"),
