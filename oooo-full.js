@@ -19,6 +19,8 @@
 	}
 
 	function persistentSet(key, value) {
+		if (value && typeof value === "object" && Object.getPrototypeOf(value) === null)
+			value = JSON.parse(JSON.stringify(value));
 		Lampa.Storage.set(key, value, true);
 	}
 
