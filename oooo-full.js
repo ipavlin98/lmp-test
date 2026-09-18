@@ -1873,7 +1873,6 @@
 		}
 
 		this.showServerNotConfigured = function () {
-			var _this = this;
 			var html = Lampa.Template.get("lampac_server_not_configured", {});
 			html.find(".cancel").on("hover:enter", function () {
 				Lampa.Activity.backward();
@@ -1886,19 +1885,30 @@
 			this.loading(false);
 		};
 
+		this.showRezkaLogin = function () {
+			var html = Lampa.Template.get("lampac_does_not_answer", {});
+			html.find(".online-empty__title").text(Lampa.Lang.translate("lampac_rezka_login_title"));
+			html.find(".online-empty__time").text(Lampa.Lang.translate("lampac_rezka_login_desc"));
+			html.find(".cancel").on("hover:enter", function () {
+				Lampa.Activity.backward();
+			});
+			html.find(".change").text(Lampa.Lang.translate("lampac_open_settings")).on("hover:enter", function () {
+				Lampa.Controller.toggle("settings");
+				Lampa.Settings.create("lamponline_rezka", {
+					onBack: function () {
+						Lampa.Settings.create("lamponline_settings");
+					}
+				});
+			});
+			scroll.clear();
+			scroll.append(html);
+			this.loading(false);
+		};
+
 		this.initialize = function () {
 			initTemplates();
 
 			var _this = this;
-
-			if (!isServerConfigured()) {
-				this.loading(true);
-				scroll.body().addClass("torrent-list");
-				files.appendFiles(scroll.render());
-				Lampa.Controller.enable("content");
-				this.showServerNotConfigured();
-				return;
-			}
 
 			this.loading(true);
 			filter.onSearch = function (value) {
@@ -2019,6 +2029,14 @@
 				});
 			});
 			filter.render().find(".filter--sort").before(serverBtn);
+			filter.render().on("hover:focus", ".selector", function (e) {
+				last = e.target;
+			});
+			balanser = this.getLastChoiceBalanser();
+			addRezkaSource();
+			filter_sources = Lampa.Arrays.getKeys(sources);
+			if (!isServerConfigured()) balanser = REZKA_SOURCE;
+			this.filter({source: filter_sources}, this.getChoice());
 
 			scroll.body().addClass("torrent-list");
 			files.appendFiles(scroll.render());
@@ -2028,12 +2046,29 @@
 			Lampa.Controller.enable("content");
 			this.loading(false);
 
+			if (balanser === REZKA_SOURCE || !isServerConfigured()) {
+				if (balanser !== REZKA_SOURCE) return this.showServerNotConfigured();
+				return rezka.restore(function () {
+					if (destroyed) return;
+					_this.search();
+					if (isServerConfigured()) {
+						_this.createSource().then(function () {
+							if (!destroyed) _this.filter({source: filter_sources}, _this.getChoice());
+						})["catch"](function () {
+							if (!destroyed) filter.render().find(".lampac-balanser-loader").remove();
+						});
+					}
+				});
+			}
+
 			if (object.balanser) {
 				files.render().find(".filter--search").remove();
 				sources = {};
 				sources[object.balanser] = { name: object.balanser };
 				balanser = object.balanser;
-				filter_sources = [];
+				addRezkaSource();
+				filter_sources = Lampa.Arrays.getKeys(sources);
+				this.filter({source: filter_sources}, this.getChoice());
 
 				var reqUrl = account(object.url.replace("rjson=", "nojson="));
 
@@ -2045,8 +2080,7 @@
 					}.bind(this),
 					function (e) {
 						if (destroyed) return;
-						hideSources();
-						_this.empty();
+						_this.noConnectToServer(e);
 					},
 					false,
 					{
@@ -2159,16 +2193,12 @@
 		this.getLastChoiceBalanser = StateManager.getLastChoiceBalanser;
 
 		function addRezkaSource() {
-			if (rezkaAuthorized()) {
-				var ordered = {};
-				ordered[REZKA_SOURCE] = {name: "HDRezka", show: true};
-				Object.keys(sources).forEach(function (name) {
-					if (name !== REZKA_SOURCE) ordered[name] = sources[name];
-				});
-				sources = ordered;
-			} else {
-				delete sources[REZKA_SOURCE];
-			}
+			var ordered = {};
+			ordered[REZKA_SOURCE] = {name: "HDRezka", show: true};
+			Object.keys(sources).forEach(function (name) {
+				if (name !== REZKA_SOURCE) ordered[name] = sources[name];
+			});
+			sources = ordered;
 		}
 
 		function sourceItems() {
@@ -2183,13 +2213,6 @@
 			if (filter_sources[0] === REZKA_SOURCE && items.length > 1)
 				items.splice(1, 0, {title: "Балансеры сервера", separator: true});
 			return items;
-		}
-
-		function hideSources() {
-			filter.render().find(".filter--sort, .filter--search").addClass("hide");
-			filter.get("filter").forEach(function (item) {
-				if (item.stype === "source") item.hide = true;
-			});
 		}
 
 		function updateSourceItems() {
@@ -2218,10 +2241,13 @@
 			filter_sources = Lampa.Arrays.getKeys(sources);
 			if (!filter_sources.length) return Promise.reject();
 
-			balanser = StateManager.getLastChoiceBalanser();
-			if (!sources[balanser]) balanser = filter_sources[0];
+			var fallback = filter_sources.filter(function (name) {
+				return sources[name].show && (name !== REZKA_SOURCE || rezkaAuthorized());
+			})[0] || filter_sources[0];
+			balanser = balanser || StateManager.getLastChoiceBalanser();
+			if (!sources[balanser] || (!balanser && !rezkaAuthorized())) balanser = fallback;
 			if (!sources[balanser].show && !object.lampac_custom_select)
-				balanser = filter_sources[0];
+				balanser = fallback;
 			source = sources[balanser].url;
 			Lampa.Storage.set(Config.StorageKeys.ActiveBalanser, balanser);
 
@@ -2264,16 +2290,13 @@
 							(any || balanserName(c) === last_balanser);
 					});
 
-					if (found.length || (rezkaAuthorized() && (any || last_balanser === REZKA_SOURCE))) {
+					if (found.length || any || last_balanser === REZKA_SOURCE) {
 						resolved = true;
 						resolve(
 							json.online.filter(function (c) {
 								return typeof c.show === "undefined" || c.show;
 							})
 						);
-					} else if (any) {
-						stopped = true;
-						reject();
 					}
 				}
 
@@ -2390,6 +2413,7 @@
 
 		this.requestRezka = function (url) {
 			if (destroyed) return;
+			if (!rezkaAuthorized()) return this.showRezkaLogin();
 			request_generation++;
 			var self = this;
 			rezka.load(object, this.getChoice(), url, function (result) {
@@ -2402,6 +2426,7 @@
 				else self.display(result.videos);
 			}, function (message) {
 				if (destroyed) return;
+				if (!rezkaAuthorized()) return self.showRezkaLogin();
 				addRezkaSource();
 				filter_sources = Lampa.Arrays.getKeys(sources);
 				self.filter({source: filter_sources}, self.getChoice());
@@ -2449,7 +2474,7 @@
 					if (destroyed) return;
 					number_of_requests = 0;
 				}, 4000);
-			} else this.empty();
+			} else this.noConnectToServer();
 		};
 
 		this.parseJsonDate = function (str, name) {
@@ -2994,7 +3019,7 @@
 				title: Lampa.Lang.translate("settings_rest_source"),
 				stype: "source"
 			});
-			this.saveChoice(choice);
+			if (balanser) this.saveChoice(choice);
 			if (filter_items.voice && filter_items.voice.length)
 				add("voice", Lampa.Lang.translate("torrent_parser_voice"));
 			if (filter_items.season && filter_items.season.length)
@@ -3595,7 +3620,12 @@
 
 		this.empty = function () {
 			var html = Lampa.Template.get("lampac_does_not_answer", {});
-			html.find(".online-empty__buttons").remove();
+			html.find(".cancel").on("hover:enter", function () {
+				Lampa.Activity.backward();
+			});
+			html.find(".change").on("hover:enter", function () {
+				filter.show(Lampa.Lang.translate("lampac_balanser"), "sort");
+			});
 			html
 				.find(".online-empty__title")
 				.text(Lampa.Lang.translate("empty_title_two"));
@@ -3603,39 +3633,30 @@
 			scroll.clear();
 			scroll.append(html);
 			this.loading(false);
-			hideSources();
-			var $serverBtn = filter.render().find(".filter--server");
-			if ($serverBtn.length) {
-				Lampa.Controller.collectionFocus($serverBtn[0], filter.render());
-			}
 		};
 
 		this.noConnectToServer = function (er) {
 			if (destroyed) return;
 			var html = Lampa.Template.get("lampac_does_not_answer", {});
-			html.find(".online-empty__buttons").remove();
+			html.find(".cancel").on("hover:enter", function () {
+				Lampa.Activity.backward();
+			});
+			html.find(".change").text("Выбрать сервер").on("hover:enter", function () {
+				openServerMenu();
+			});
 			html
 				.find(".online-empty__title")
-				.text(Lampa.Lang.translate("title_error"));
-			var bname = sources[balanser] ? sources[balanser].name : balanser;
+				.text(er && er.accsdb ? Lampa.Lang.translate("title_error") : Lampa.Lang.translate("lampac_server_unavailable"));
 			html
 				.find(".online-empty__time")
 				.text(
 					er && er.accsdb
 						? er.msg
-						: Lampa.Lang.translate("lampac_does_not_answer_text").replace(
-								"{balanser}",
-								bname
-							)
+						: Lampa.Lang.translate("lampac_server_unavailable_desc")
 				);
 			scroll.clear();
 			scroll.append(html);
 			this.loading(false);
-			hideSources();
-			var $serverBtn = filter.render().find(".filter--server");
-			if ($serverBtn.length) {
-				Lampa.Controller.collectionFocus($serverBtn[0], filter.render());
-			}
 		};
 
 		this.doesNotAnswer = function (er) {
@@ -3689,7 +3710,7 @@
 		function safeLastFocus() {
 			if (!last) return false;
 			try {
-				var render = scroll.render();
+				var render = files.render();
 				if (
 					render &&
 					render[0] &&
@@ -3717,8 +3738,8 @@
 			);
 			Lampa.Controller.add("content", {
 				toggle: function toggle() {
-					Lampa.Controller.collectionSet(scroll.render(), files.render());
-					Lampa.Controller.collectionFocus(safeLastFocus(), scroll.render());
+					Lampa.Controller.collectionSet(files.render(), false, true);
+					Lampa.Controller.collectionFocus(safeLastFocus(), scroll.render().find(".selector:visible").length ? scroll.render() : filter.render(), true);
 				},
 				gone: function gone() {
 					clearInterval(balanser_timer);
@@ -4171,6 +4192,30 @@
 				uk: "Вкажіть адресу сервера в налаштуваннях для перегляду онлайн",
 				en: "Specify the server address in settings to watch online",
 				zh: "在设置中指定服务器地址以在线观看"
+			},
+			lampac_server_unavailable: {
+				ru: "Сервер не отвечает",
+				uk: "Сервер не відповідає",
+				en: "Server is unavailable",
+				zh: "服务器无响应"
+			},
+			lampac_server_unavailable_desc: {
+				ru: "Выберите другой сервер или HDRezka в списке балансеров.",
+				uk: "Виберіть інший сервер або HDRezka у списку балансерів.",
+				en: "Choose another server or HDRezka from the balancer list.",
+				zh: "请在平衡器列表中选择其他服务器或 HDRezka。"
+			},
+			lampac_rezka_login_title: {
+				ru: "Войдите в HDRezka",
+				uk: "Увійдіть у HDRezka",
+				en: "Sign in to HDRezka",
+				zh: "登录 HDRezka"
+			},
+			lampac_rezka_login_desc: {
+				ru: "Для просмотра откройте настройки HDRezka и войдите в аккаунт.",
+				uk: "Для перегляду відкрийте налаштування HDRezka та увійдіть в акаунт.",
+				en: "Open HDRezka settings and sign in to watch.",
+				zh: "打开 HDRezka 设置并登录后即可观看。"
 			},
 			lampac_open_settings: {
 				ru: "Открыть настройки",
