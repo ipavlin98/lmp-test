@@ -3944,6 +3944,7 @@
 
 		var send = player.listener.send;
 		var attempt;
+		var armTimer;
 
 		function clearAttempt() {
 			if (attempt) clearTimeout(attempt.timer);
@@ -3969,7 +3970,8 @@
 			return true;
 		}
 
-		if (data.lamponline_hls_auto && /\.m3u8/.test(data.url)) {
+		function armAutoHls(data) {
+			if (attempt || !data || !data.lamponline_stream || !data.lamponline_hls_auto || !/\.m3u8/.test(data.url)) return;
 			attempt = {
 				data: data,
 				src: data.url,
@@ -3980,6 +3982,14 @@
 			};
 			attempt.timer = setTimeout(retryHls, Math.max(30000, Number(data.hls_manifest_timeout) || 0));
 		}
+		function onVideoDestroy() {
+			clearAttempt();
+			clearTimeout(armTimer);
+			armTimer = setTimeout(function () {
+				armAutoHls(Lampa.Player.playdata());
+			}, 10);
+		}
+		armAutoHls(data);
 		var listener = player.listener;
 		function onLoadedData() {
 			if (attempt && attempt.data === Lampa.Player.playdata() && !attempt.pending) {
@@ -3988,7 +3998,7 @@
 			}
 		}
 		listener.follow("loadeddata", onLoadedData);
-		listener.follow("destroy", clearAttempt);
+		listener.follow("destroy", onVideoDestroy);
 		var patchedSend = listener.send = function (event, error) {
 			var data = Lampa.Player.playdata();
 			if (event === "error" && error && error.fatal === false &&
@@ -3997,10 +4007,11 @@
 			return send.apply(this, arguments);
 		};
 		restorePlayerBuffer = function () {
+			clearTimeout(armTimer);
 			clearAttempt();
 			if (patchedLoadSource && prototype.loadSource === patchedLoadSource) prototype.loadSource = loadSource;
 			listener.remove("loadeddata", onLoadedData);
-			listener.remove("destroy", clearAttempt);
+			listener.remove("destroy", onVideoDestroy);
 			if (listener.send === patchedSend) listener.send = send;
 			restorePlayerBuffer = null;
 		};
