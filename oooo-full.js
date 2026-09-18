@@ -4661,6 +4661,8 @@
 	}
 
 	function openServerInput(callback) {
+		var activity = Lampa.Activity.active();
+		var enabled = Lampa.Controller.enabled().name;
 		Lampa.Input.edit(
 			{
 				title: Lampa.Lang.translate("lampac_server_address"),
@@ -4677,16 +4679,34 @@
 					setActiveServerIndex(servers.indexOf(new_value));
 					ensureRchNws();
 				}
+				if (Lampa.Activity.active() !== activity) return;
 				if (callback) callback(new_value);
+				else Lampa.Controller.toggle(enabled);
 			}
 		);
 	}
 
-	function openServerSelect(callback, onBackOverride) {
+	function openServerSelect(callback, onBackOverride, context) {
+		context = context || {
+			activity: Lampa.Activity.active(),
+			controller: Lampa.Controller.enabled().name
+		};
+		if (Lampa.Activity.active() !== context.activity) return;
 		var servers = getServersList();
 		var activeIndex = getActiveServerIndex();
 		var items = [];
-		var skipOnBack = false;
+
+		function back() {
+			if (Lampa.Activity.active() !== context.activity) return;
+			if (onBackOverride) onBackOverride();
+			else Lampa.Controller.toggle(context.controller);
+		}
+
+		function refresh() {
+			if (Lampa.Activity.active() !== context.activity) return;
+			if (callback) callback();
+			openServerSelect(callback, onBackOverride, context);
+		}
 
 		servers.forEach(function (server, index) {
 			items.push({
@@ -4701,29 +4721,13 @@
 			add: true
 		});
 
-		var enabled = Lampa.Controller.enabled().name;
-
 		Lampa.Select.show({
 			title: Lampa.Lang.translate("lampac_select_server"),
 			items: items,
-			onBack: function () {
-				if (skipOnBack) {
-					return;
-				}
-				if (onBackOverride) {
-					onBackOverride();
-				} else {
-					Lampa.Controller.toggle(enabled);
-				}
-			},
+			onBack: back,
 			onSelect: function (item) {
 				if (item.add) {
-					skipOnBack = true;
-					Lampa.Select.close();
-					openServerInput(function (new_value) {
-						if (callback) callback();
-						Lampa.Controller.toggle(enabled);
-					});
+					openServerInput(refresh);
 				} else if (item.selected) {
 					var displayName = formatServerDisplay(servers[item.index]);
 					Lampa.Select.show({
@@ -4739,11 +4743,10 @@
 							}
 						],
 						onBack: function () {
-							openServerSelect(callback, onBackOverride);
+							openServerSelect(callback, onBackOverride, context);
 						},
 						onSelect: function (a) {
 							if (a.edit) {
-								Lampa.Select.close();
 								Lampa.Input.edit(
 									{
 										title: Lampa.Lang.translate("lampac_server_address"),
@@ -4758,26 +4761,21 @@
 											editServer(item.index, new_value);
 											ensureRchNws();
 										}
-										if (callback) callback();
-										openServerSelect(callback, onBackOverride);
+										refresh();
 									}
 								);
 							} else if (a.remove) {
 								removeServer(item.index);
-								if (callback) callback();
-								openServerSelect(callback, onBackOverride);
+								refresh();
 							}
 						}
 					});
 				} else {
 					setActiveServerIndex(item.index);
 					ensureRchNws();
+					if (Lampa.Activity.active() !== context.activity) return;
 					if (callback) callback();
-					if (onBackOverride) {
-						onBackOverride();
-					} else {
-						Lampa.Controller.toggle(enabled);
-					}
+					back();
 				}
 			}
 		});
