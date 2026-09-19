@@ -3,16 +3,70 @@
 
 	var SEASON_FIX = {
 		id: "season_fix",
-		version: "1.6",
+		version: "1.6-debug1",
+		debug_enabled: true,
+		debug_rows: {},
+		debug_timer: null,
 		tvmaze_cache: {},
 		tvmaze_pending: {},
 		tvmaze_retry_after: {},
 		current_tv_id: null,
 
+		debug: function (key, value) {
+			if (!this.debug_enabled) return;
+			value = String(value).replace(/https?:\/\/[^\s)]+/g, "[url]").slice(0, 140);
+			if (this.debug_rows[key] === value) return;
+			this.debug_rows[key] = value;
+			this.debugShow();
+		},
+
+		debugShow: function () {
+			var _this = this;
+			if (!this.debug_enabled || this.debug_timer) return;
+			this.debug_timer = setTimeout(function () {
+				_this.debug_timer = null;
+				if (typeof Lampa === "undefined" || !Lampa.Noty || !Lampa.Noty.show) {
+					_this.debugShow();
+					return;
+				}
+				var escape = function (value) {
+					return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+				};
+				var rows = ["Season Fix " + _this.version + " | " + new Date().toTimeString().slice(0, 8)];
+				["Boot", "Card", "Req", "IDs", "Lookup", "Episodes", "Split", "Error"].forEach(function (key) {
+					var value = _this.debug_rows[key] || "—";
+					if (key === "Boot") value = value.replace(/ready=(true|false)/, "ready=" + !!window.appready);
+					rows.push(key + ": " + escape(value));
+				});
+				if (_this.split_override && Lampa.Utils.splitEpisodesIntoSeasons !== _this.split_override) {
+					rows[1] += " | SPLIT REPLACED";
+				}
+				Lampa.Noty.show('<div style="font-size:0.72em;line-height:1.3;max-width:70vw;overflow-wrap:break-word">' + rows.join("<br>") + "</div>", { time: 120000 });
+			}, 700);
+		},
+
+		debugError: function (where, error) {
+			var stack = error && error.stack ? String(error.stack).split("\n").slice(1, 3).join(" ") : "";
+			this.debug("Error", where + ": " + (error && error.message || error || "unknown") + " " + stack);
+		},
+
+		debugRequest: function (url, channel, callback) {
+			if (typeof url !== "string") return;
+			var match = url.match(/(?:^|\/)tv\/(\d+)(?:\/season\/(\d+))?/);
+			if (!match) return;
+			this.debug("Req", channel + " tv=" + match[1] + " season=" + (match[2] || "-") + " cb=" + typeof callback);
+		},
+
 		init: function () {
 			var _this = this;
 			var waitForLampa = function () {
-				_this.hook();
+				try {
+					_this.hook();
+				} catch (e) {
+					_this.debugError("init", e);
+				}
+				var chrome = navigator.userAgent.match(/(?:Chrome|Chromium)\/([\d.]+)/);
+				_this.debug("Boot", "ready=" + !!window.appready + " split=" + !!_this.hooked + " req=" + !!_this.requests_hooked + " ajax=" + !!_this.ajax_hooked + " engine=" + (chrome ? chrome[1] : "other") + " " + location.protocol);
 				if (!_this.hooked || !_this.requests_hooked || !_this.ajax_hooked) {
 					setTimeout(waitForLampa, 500);
 				}
@@ -47,6 +101,7 @@
 
 			Lampa.Utils.splitEpisodesIntoSeasons = function (episodes, gap) {
 				if (!Array.isArray(episodes) || episodes.length === 0) {
+					_this.debug("Split", "empty input");
 					return {};
 				}
 
@@ -55,16 +110,25 @@
 					_this.current_tv_id;
 				var seasonMap = tvId ? _this.tvmaze_cache[tvId] : null;
 
-				if (
-					seasonMap &&
-					typeof seasonMap === "object" &&
-					Object.keys(seasonMap).length > 0
-				) {
-					return _this.splitByTvmaze(episodes, seasonMap);
-				}
+				try {
+					if (
+						seasonMap &&
+						typeof seasonMap === "object" &&
+						Object.keys(seasonMap).length > 0
+					) {
+						var result = _this.splitByTvmaze(episodes, seasonMap);
+						_this.debug("Split", "tv=" + tvId + " in=" + episodes.length + " TVmaze " + Object.keys(result).map(function (s) { return s + ":" + result[s].length; }).join(" "));
+						return result;
+					}
 
-				return originalSplit.call(this, episodes, gap);
+					_this.debug("Split", "tv=" + (tvId || "?") + " in=" + episodes.length + " ORIGINAL pending=" + !!_this.tvmaze_pending[tvId]);
+					return originalSplit.call(this, episodes, gap);
+				} catch (e) {
+					_this.debugError("split", e);
+					throw e;
+				}
 			};
+			this.split_override = Lampa.Utils.splitEpisodesIntoSeasons;
 		},
 
 		splitByTvmaze: function (episodes, seasonMap) {
@@ -110,7 +174,7 @@
 			return seasons;
 		},
 
-		prepareResponse: function (url, callback) {
+		prepareResponse: function (url, callback, channel) {
 			var _this = this;
 			var match = typeof url === "string" ? url.match(/(?:^|\/)tv\/(\d+)\/season\/1(?:[/?#]|$)/) : null;
 			if (!this.hooked || !match || typeof callback !== "function" || callback.season_fix_response) return callback;
@@ -123,6 +187,8 @@
 			var wrapped = function (data) {
 				var context = this;
 				var args = arguments;
+				var first = data && data.episodes && data.episodes[0] || {};
+				_this.debug("Req", channel + " response tv=" + tvId + " n=" + (data && Array.isArray(data.episodes) ? data.episodes.length : "missing") + " first=" + (first.show_id || first.series_id || "?") + "/s" + first.season_number + "e" + first.episode_number);
 				if (!data || !Array.isArray(data.episodes)) return callback.apply(context, args);
 
 				_this.fetchTvmaze(tvId, apiKey, function () {
@@ -130,6 +196,9 @@
 					_this.current_tv_id = tvId;
 					try {
 						callback.apply(context, args);
+					} catch (e) {
+						_this.debugError("response", e);
+						throw e;
 					} finally {
 						_this.current_tv_id = previousId;
 					}
@@ -145,7 +214,18 @@
 
 			Lampa.Listener.follow("request_before", function (e) {
 				if (e.params) {
-					e.params.complite = _this.prepareResponse(e.params.url, e.params.complite);
+					_this.debugRequest(e.params.url, "Lampa", e.params.complite);
+					e.params.complite = _this.prepareResponse(e.params.url, e.params.complite, "Lampa");
+				}
+			});
+			Lampa.Listener.follow("activity", function (e) {
+				if (e.type !== "start") return;
+				try {
+					var active = Lampa.Activity.active() || {};
+					var card = active.movie || active.card || {};
+					_this.debug("Card", (card.name || card.title || active.title || "?") + " id=" + (card.id || "?") + " src=" + (card.source || active.source || "?") + " view=" + (active.component || "?"));
+				} catch (error) {
+					_this.debugError("activity", error);
 				}
 			});
 			this.requests_hooked = true;
@@ -163,7 +243,8 @@
 			$.ajax = function (url, options) {
 				var settings = (typeof url === "object" ? url : options) || {};
 				var reqUrl = typeof url === "string" ? url : settings.url || "";
-				settings.success = _this.prepareResponse(reqUrl, settings.success);
+				_this.debugRequest(reqUrl, "ajax", settings.success);
+				settings.success = _this.prepareResponse(reqUrl, settings.success, "ajax");
 
 				return originalAjax.apply(this, arguments);
 			};
@@ -189,6 +270,10 @@
 			}
 
 			this.tvmaze_pending[tvId] = callback ? [callback] : [];
+			this.debug("IDs", "tv=" + tvId + " loading");
+			this.debug("Lookup", "waiting");
+			this.debug("Episodes", "waiting");
+			this.debug("Error", "—");
 			var finished = false;
 			var finish = function (map) {
 				if (finished) return;
@@ -197,6 +282,7 @@
 				var callbacks = _this.tvmaze_pending[tvId];
 				delete _this.tvmaze_pending[tvId];
 				if (map) {
+					_this.debug("Episodes", "tv=" + tvId + " map=" + Object.keys(map).map(function (s) { return s + ":" + map[s]; }).join(" "));
 					_this.tvmaze_cache[tvId] = map;
 					delete _this.tvmaze_retry_after[tvId];
 				} else {
@@ -212,6 +298,7 @@
 				}
 			};
 			var timer = setTimeout(function () {
+				_this.debug("Error", "tv=" + tvId + " total timeout 15s");
 				finish(null);
 			}, 15000);
 
@@ -225,6 +312,7 @@
 			}
 
 			if (!apiKey) {
+				this.debug("Error", "TMDB key unavailable");
 				finish(null);
 				return;
 			}
@@ -244,6 +332,7 @@
 
 			this.makeRequest(externalUrl, function (ids, status, error) {
 				if (finished) return;
+				_this.debug("IDs", "tv=" + tvId + " status=" + status + " imdb=" + (ids && ids.imdb_id || "-") + " tvdb=" + (ids && ids.tvdb_id || "-") + (error ? " " + error : ""));
 				if (!ids) {
 					finish(null);
 					return;
@@ -267,9 +356,11 @@
 
 				var lookupUrl =
 					"https://api.tvmaze.com/lookup/shows?" + lookupType + "=" + lookupId;
+				_this.debug("Lookup", lookupType + "=" + lookupId + " loading");
 
 				_this.makeRequest(lookupUrl, function (showData, status2, error2) {
 					if (finished) return;
+					_this.debug("Lookup", "status=" + status2 + " maze=" + (showData && showData.id || "-") + " " + (showData && showData.name || error2 || ""));
 					if (!showData || !showData.id) {
 						finish(null);
 						return;
@@ -277,9 +368,11 @@
 
 					var episodesUrl =
 						"https://api.tvmaze.com/shows/" + showData.id + "/episodes";
+					_this.debug("Episodes", "maze=" + showData.id + " loading");
 
 					_this.makeRequest(episodesUrl, function (episodes, status3, error3) {
 						if (finished) return;
+						_this.debug("Episodes", "status=" + status3 + " count=" + (Array.isArray(episodes) ? episodes.length : "invalid") + (error3 ? " " + error3 : ""));
 						if (!Array.isArray(episodes) || !episodes.length) {
 							finish(null);
 							return;
@@ -301,11 +394,16 @@
 		},
 
 		makeRequest: function (url, callback) {
+			var _this = this;
+			var stage = url.indexOf("external_ids") >= 0 ? "IDs" : url.indexOf("lookup/shows") >= 0 ? "Lookup" : "Episodes";
+			var host = url.match(/^(?:https?:)?\/\/([^/?#]+)/);
+			var started = Date.now();
 			var completed = false;
 			var fallbackStarted = false;
 			var finish = function (data, status, error) {
 				if (completed) return;
 				completed = true;
+				if (error) _this.debug("Error", stage + " " + (host ? host[1] : "?") + " status=" + status + " " + error + " " + (Date.now() - started) + "ms");
 				callback(data, status, error);
 			};
 
@@ -330,6 +428,7 @@
 					};
 
 					var errorCb = function (e, x) {
+						_this.debug("Error", stage + " Lampa status=" + (e && e.status || 0) + " " + (x || "error") + " -> XHR");
 						useXHR();
 					};
 
@@ -339,6 +438,7 @@
 						network.silent(url, successCb, errorCb);
 					}
 				} catch (e) {
+					_this.debugError(stage + " request", e);
 					useXHR();
 				}
 			};
@@ -384,7 +484,10 @@
 		}
 	};
 
-	if (window.SEASON_FIX_LOADED) return;
+	if (window.SEASON_FIX_LOADED) {
+		SEASON_FIX.debug("Boot", "DUPLICATE: active version=" + (window.SEASON_FIX && window.SEASON_FIX.version || "unknown"));
+		return;
+	}
 	window.SEASON_FIX_LOADED = true;
 	window.SEASON_FIX = SEASON_FIX;
 	SEASON_FIX.init();
