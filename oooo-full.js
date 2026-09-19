@@ -615,7 +615,8 @@
 			RchController.closeHost(previous.replace(/^https?:\/\//, ""));
 			ensureRchNws();
 			var active = Lampa.Activity.active();
-			if (active && active.component === "lamponline") Lampa.Activity.replace();
+			if (active && active.component === "lamponline" && !$('body').hasClass('settings--open'))
+				Lampa.Activity.replace({lampac_custom_select: ""});
 		}
 	};
 
@@ -1503,6 +1504,9 @@
 		var source;
 		var balanser;
 		var initialized;
+		var initial_server = getServerUrl();
+		var awaiting_setup = false;
+		var refresh_timer;
 		var balanser_timer;
 		var images = [];
 		var number_of_requests = 0;
@@ -1513,6 +1517,18 @@
 		var destroyed = false;
 		var generation = 0;
 		var request_generation = 0;
+		var refreshAfterSetup = function () {
+			var active = Lampa.Activity.active();
+			if (destroyed || !active || active.activity !== this.activity || $('body').hasClass('settings--open')) return false;
+			if (initial_server === getServerUrl() && !(awaiting_setup && rezkaAuthorized())) return false;
+			clearTimeout(refresh_timer);
+			refresh_timer = setTimeout(function () {
+				var current = Lampa.Activity.active();
+				if (destroyed || !current || current.activity !== active.activity || $('body').hasClass('settings--open')) return;
+				Lampa.Activity.replace({lampac_custom_select: initial_server !== getServerUrl() ? "" : REZKA_SOURCE});
+			}, 0);
+			return true;
+		}.bind(this);
 		var filter_sources = [];
 		var filter_translate = {
 			season: Lampa.Lang.translate("torrent_serial_season"),
@@ -1698,7 +1714,7 @@
 				} else {
 					return Lampa.Storage.get(
 						StorageKeys.OnlineBalanser,
-						filter_sources.length ? filter_sources[0] : ""
+						""
 					);
 				}
 			}
@@ -1886,6 +1902,7 @@
 		};
 
 		this.showRezkaLogin = function () {
+			awaiting_setup = true;
 			var needsSetup = !isServerConfigured() && !rezkaAuthorized();
 			var html = Lampa.Template.get("lampac_does_not_answer", {});
 			html.find(".online-empty__title").text(Lampa.Lang.translate(needsSetup ? "lampac_setup_title" : "lampac_rezka_login_title"));
@@ -1909,6 +1926,7 @@
 
 		this.initialize = function () {
 			initTemplates();
+			Lampa.Settings.listener.follow("close", refreshAfterSetup);
 
 			var _this = this;
 
@@ -2034,7 +2052,9 @@
 			filter.render().on("hover:focus", ".selector", function (e) {
 				last = e.target;
 			});
-			balanser = this.getLastChoiceBalanser();
+			balanser = object.lampac_custom_select || this.getLastChoiceBalanser();
+			if (isServerConfigured() && balanser === REZKA_SOURCE && object.lampac_custom_select !== REZKA_SOURCE)
+				balanser = "";
 			addRezkaSource();
 			filter_sources = Lampa.Arrays.getKeys(sources);
 			if (!isServerConfigured()) balanser = REZKA_SOURCE;
@@ -2244,10 +2264,10 @@
 			if (!filter_sources.length) return Promise.reject();
 
 			var fallback = filter_sources.filter(function (name) {
-				return sources[name].show && (name !== REZKA_SOURCE || rezkaAuthorized());
-			})[0] || filter_sources[0];
-			balanser = balanser || StateManager.getLastChoiceBalanser();
-			if (!sources[balanser] || (!balanser && !rezkaAuthorized())) balanser = fallback;
+				return sources[name].show && name !== REZKA_SOURCE;
+			})[0];
+			if (!fallback && balanser !== REZKA_SOURCE) return Promise.reject(new Error("Сервер не вернул доступных балансеров"));
+			if (!sources[balanser]) balanser = fallback;
 			if (!sources[balanser].show && !object.lampac_custom_select)
 				balanser = fallback;
 			source = sources[balanser].url;
@@ -2286,7 +2306,7 @@
 
 					if (resolved) return;
 
-					var last_balanser = _this3.getLastChoiceBalanser();
+					var last_balanser = balanser;
 					var found = json.online.filter(function (c) {
 						return (typeof c.show === "undefined" || c.show) &&
 							(any || balanserName(c) === last_balanser);
@@ -2335,7 +2355,7 @@
 
 							tryResolve(json, false);
 
-							var lastb = _this3.getLastChoiceBalanser();
+							var lastb = balanser;
 							if (life_wait_times > 15 || json.ready) {
 								stopped = true;
 								filter.render().find(".lampac-balanser-loader").remove();
@@ -3740,6 +3760,7 @@
 			);
 			Lampa.Controller.add("content", {
 				toggle: function toggle() {
+					if (refreshAfterSetup()) return;
 					Lampa.Controller.collectionSet(files.render(), false, true);
 					Lampa.Controller.collectionFocus(safeLastFocus(), scroll.render().find(".selector:visible").length ? scroll.render() : filter.render(), true);
 				},
@@ -3780,6 +3801,8 @@
 		this.destroy = function () {
 			if (destroyed) return;
 			destroyed = true;
+			clearTimeout(refresh_timer);
+			Lampa.Settings.listener.remove("close", refreshAfterSetup);
 			generation++;
 			clearInterval(balanser_timer);
 			clearTimeout(life_wait_timer);
