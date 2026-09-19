@@ -7,10 +7,11 @@
 		season_cache: {},
 		pending: {},
 		current_tv_id: null,
+		hooked: false,
+		/*
 		debug_enabled: true,
 		debug_rows: {},
 		debug_timer: null,
-		hooked: false,
 
 		debug: function (key, value) {
 			if (!this.debug_enabled) return;
@@ -74,6 +75,7 @@
 				_this.debug_content.innerHTML = rows.join("<br>");
 			}, 300);
 		},
+		*/
 
 		splitBySeasonNumber: function (episodes) {
 			var seasons = {};
@@ -205,7 +207,7 @@
 				delete _this.pending[tvId];
 				waiting.forEach(function (ready) {
 					try { ready(entry); }
-					catch (e) { _this.debug("Ошибка", e.message); console.error("Season Fix", e); }
+					catch (e) { /* _this.debug("Ошибка", e.message); console.error("Season Fix", e); */ }
 				});
 				if (entry.map) window.dispatchEvent(new CustomEvent("tvmaze_loaded", { detail: { id: tvId, source: "cinemeta" } }));
 			};
@@ -230,6 +232,7 @@
 			});
 		},
 
+		/*
 		reportResponse: function (tvId, requested, data, inputCount) {
 			var entry = this.season_cache[tvId];
 			this.debug("Ответ", "последний: tv=" + tvId + "; запрос S" + requested + " → S" + data.season_number + "; TMDB=" + inputCount + ", отдано=" + data.episodes.length);
@@ -240,6 +243,7 @@
 			var images = data.episodes.filter(function (ep) { return ep && ep.still_path; }).length;
 			this.debug("Данные", "с описанием=" + descriptions + "; с кадром=" + images + "; ID эпизодов TMDB сохранены");
 		},
+		*/
 
 		hookRequest: function (params) {
 			if (!params || params.season_fix_wrapped || typeof params.complite !== "function") return;
@@ -259,16 +263,16 @@
 					var previous = _this.current_tv_id;
 					_this.current_tv_id = tvId;
 					var inputCount = data.episodes.length;
-					_this.debug("Разбиение", "сезон TMDB без переразметки");
+					/* _this.debug("Разбиение", "сезон TMDB без переразметки"); */
 					try {
 						return complete.apply(context, args);
 					} finally {
 						_this.current_tv_id = previous;
-						_this.reportResponse(tvId, requested, data, inputCount);
+						/* _this.reportResponse(tvId, requested, data, inputCount); */
 					}
 				};
 				if (requested === 1) {
-					_this.debug("Статус", "tv=" + tvId + "; ожидание разметки Cinemeta");
+					/* _this.debug("Статус", "tv=" + tvId + "; ожидание разметки Cinemeta"); */
 					_this.ensureMap(tvId, deliver);
 				} else return deliver();
 			};
@@ -289,19 +293,19 @@
 				if (mapped) seasons = mapped;
 				var counts = {};
 				Object.keys(seasons).forEach(function (season) { counts[season] = seasons[season].length; });
-				_this.debug("Разбиение", (mapped ? "Cinemeta: " : "сохранены сезоны TMDB: ") + _this.mapSummary(counts));
+				/* _this.debug("Разбиение", (mapped ? "Cinemeta: " : "сохранены сезоны TMDB: ") + _this.mapSummary(counts)); */
 				return seasons;
 			};
 			Lampa.Utils.splitEpisodesIntoSeasons = this.split_override;
 			Lampa.Listener.follow("request_before", function (event) { _this.hookRequest(event.params); });
 			this.hooked = true;
-			this.debug("Статус", "подключён; ожидание серий; TVmaze не используется");
+			/* this.debug("Статус", "подключён; ожидание серий; TVmaze не используется"); */
 			return true;
 		},
 
 		init: function () {
 			var _this = this;
-			this.debug("Статус", "ожидание Lampa");
+			/* this.debug("Статус", "ожидание Lampa"); */
 			var waitForLampa = function () {
 				if (!_this.hook()) setTimeout(waitForLampa, 500);
 			};
@@ -311,7 +315,7 @@
 
 	if (window.SEASON_FIX) {
 		if (window.SEASON_FIX.version !== SEASON_FIX.version) {
-			SEASON_FIX.debug("Статус", "активна версия " + window.SEASON_FIX.version + "; полностью перезапустите Lampa");
+			/* SEASON_FIX.debug("Статус", "активна версия " + window.SEASON_FIX.version + "; полностью перезапустите Lampa"); */
 		}
 		return;
 	}
