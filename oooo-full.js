@@ -1886,14 +1886,16 @@
 		};
 
 		this.showRezkaLogin = function () {
+			var needsSetup = !isServerConfigured() && !rezkaAuthorized();
 			var html = Lampa.Template.get("lampac_does_not_answer", {});
-			html.find(".online-empty__title").text(Lampa.Lang.translate("lampac_rezka_login_title"));
-			html.find(".online-empty__time").text(Lampa.Lang.translate("lampac_rezka_login_desc"));
+			html.find(".online-empty__title").text(Lampa.Lang.translate(needsSetup ? "lampac_setup_title" : "lampac_rezka_login_title"));
+			html.find(".online-empty__time").text(Lampa.Lang.translate(needsSetup ? "lampac_setup_desc" : "lampac_rezka_login_desc"));
 			html.find(".cancel").on("hover:enter", function () {
 				Lampa.Activity.backward();
 			});
 			html.find(".change").text(Lampa.Lang.translate("lampac_open_settings")).on("hover:enter", function () {
 				Lampa.Controller.toggle("settings");
+				if (needsSetup) return Lampa.Settings.create("lamponline_settings");
 				Lampa.Settings.create("lamponline_rezka", {
 					onBack: function () {
 						Lampa.Settings.create("lamponline_settings");
@@ -4204,6 +4206,18 @@
 				uk: "Виберіть інший сервер або HDRezka у списку балансерів.",
 				en: "Choose another server or HDRezka from the balancer list.",
 				zh: "请在平衡器列表中选择其他服务器或 HDRezka。"
+			},
+			lampac_setup_title: {
+				ru: "Настройте просмотр онлайн",
+				uk: "Налаштуйте перегляд онлайн",
+				en: "Set up online viewing",
+				zh: "设置在线观看"
+			},
+			lampac_setup_desc: {
+				ru: "Чтобы начать просмотр, добавьте сервер или войдите в аккаунт HDRezka в настройках «Онлайн».",
+				uk: "Щоб почати перегляд, додайте сервер або увійдіть в акаунт HDRezka в налаштуваннях «Онлайн».",
+				en: "To start watching, add a server or sign in to HDRezka in Online settings.",
+				zh: "请在在线设置中添加服务器或登录 HDRezka 以开始观看。"
 			},
 			lampac_rezka_login_title: {
 				ru: "Войдите в HDRezka",
