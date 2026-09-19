@@ -3,7 +3,10 @@
 
 	var SEASON_FIX = {
 		id: "season_fix",
-		version: "2.0",
+		version: "3.0",
+		season_cache: {},
+		pending: {},
+		current_tv_id: null,
 		debug_enabled: true,
 		debug_rows: {},
 		debug_timer: null,
@@ -61,8 +64,8 @@
 				var escape = function (value) {
 					return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 				};
-				var rows = ["Season Fix " + _this.version + " | исходные сезоны TMDB"];
-				["Статус", "Вход", "Результат", "Данные"].forEach(function (key) {
+				var rows = ["Season Fix " + _this.version + " | Cinemeta + TMDB"];
+				["Статус", "Ответ", "База", "Разбиение", "Данные", "Ошибка"].forEach(function (key) {
 					rows.push(key + ": " + escape(_this.debug_rows[key] || "—"));
 				});
 				if (_this.hooked && Lampa.Utils.splitEpisodesIntoSeasons !== _this.split_override) {
@@ -93,33 +96,204 @@
 			return seasons;
 		},
 
+		mapSummary: function (map) {
+			return Object.keys(map).map(function (season) {
+				return "S" + season + ":" + map[season];
+			}).join(" ");
+		},
+
+		buildMap: function (videos) {
+			if (!Array.isArray(videos)) return null;
+			var seasons = {};
+			for (var i = 0; i < videos.length; i++) {
+				var video = videos[i];
+				if (!video) continue;
+				var season = Number(video.season);
+				if (season === 0) continue;
+				var episode = Number(video.episode == null ? video.number : video.episode);
+				if (!isFinite(season) || season < 1 || Math.floor(season) !== season || !isFinite(episode) || episode < 1 || Math.floor(episode) !== episode) return null;
+				if (!seasons[season]) seasons[season] = {};
+				seasons[season][episode] = true;
+			}
+			var map = {};
+			var keys = Object.keys(seasons).map(Number).sort(function (a, b) { return a - b; });
+			if (!keys.length) return null;
+			for (var s = 0; s < keys.length; s++) {
+				if (keys[s] !== s + 1) return null;
+				var numbers = Object.keys(seasons[keys[s]]).map(Number).sort(function (a, b) { return a - b; });
+				for (var n = 0; n < numbers.length; n++) {
+					if (numbers[n] !== n + 1) return null;
+				}
+				map[keys[s]] = numbers.length;
+			}
+			return map;
+		},
+
+		splitByMap: function (episodes, map) {
+			var sorted = episodes.slice().sort(function (a, b) { return a.episode_number - b.episode_number; });
+			var total = Object.keys(map).reduce(function (sum, season) { return sum + map[season]; }, 0);
+			if (sorted.length > total) return null;
+			var result = {};
+			var season = 1;
+			var number = 0;
+			for (var i = 0; i < sorted.length; i++) {
+				var episode = sorted[i];
+				if (!episode || episode.season_number !== 1 || episode.episode_number !== i + 1) return null;
+				if (number === map[season]) {
+					season++;
+					number = 0;
+				}
+				if (!map[season]) return null;
+				var copy = {};
+				Object.keys(episode).forEach(function (key) { copy[key] = episode[key]; });
+				copy.season_number = season;
+				copy.episode_number = ++number;
+				if (!result[season]) result[season] = [];
+				result[season].push(copy);
+			}
+			return result;
+		},
+
+		makeRequest: function (url, method, callback) {
+			var started = Date.now();
+			var finished = false;
+			var network;
+			var timer;
+			var finish = function (data, error) {
+				if (finished) return;
+				finished = true;
+				clearTimeout(timer);
+				if (network) network.clear();
+				callback(data, error, Date.now() - started);
+			};
+			timer = setTimeout(function () { finish(null, "timeout"); }, 8500);
+			try {
+				network = new Lampa.Reguest();
+				network.timeout(8000);
+				network[method](url, function (data) {
+					if (typeof data === "string") {
+						try { data = JSON.parse(data); }
+						catch (e) { finish(null, "неверный JSON"); return; }
+					}
+					finish(data, data ? null : "пустой ответ");
+				}, function (error, reason) {
+					finish(null, "status=" + (error && error.status || 0) + " " + (reason || "network error"));
+				});
+			} catch (e) {
+				finish(null, e.message);
+			}
+		},
+
+		ensureMap: function (tvId, callback) {
+			var _this = this;
+			var cached = this.season_cache[tvId];
+			if (cached && Date.now() - cached.time < (cached.map ? 21600000 : 60000)) {
+				if (callback) callback(cached);
+				return;
+			}
+			if (this.pending[tvId]) {
+				if (callback) this.pending[tvId].push(callback);
+				return;
+			}
+			this.pending[tvId] = callback ? [callback] : [];
+			var entry = { time: Date.now(), map: null, imdb: "", error: "", net: "" };
+			var finish = function (error) {
+				entry.error = error || "";
+				entry.time = Date.now();
+				_this.season_cache[tvId] = entry;
+				var waiting = _this.pending[tvId];
+				delete _this.pending[tvId];
+				waiting.forEach(function (ready) {
+					try { ready(entry); }
+					catch (e) { _this.debug("Ошибка", e.message); console.error("Season Fix", e); }
+				});
+				if (entry.map) window.dispatchEvent(new CustomEvent("tvmaze_loaded", { detail: { id: tvId, source: "cinemeta" } }));
+			};
+			if (!Lampa.TMDB || !Lampa.TMDB.api || !Lampa.TMDB.key) {
+				finish("нет доступа к TMDB API Lampa");
+				return;
+			}
+			var idsUrl = Lampa.TMDB.api("tv/" + tvId + "/external_ids?api_key=" + encodeURIComponent(Lampa.TMDB.key()));
+			this.makeRequest(idsUrl, "silent", function (ids, error) {
+				if (error) { finish("TMDB external_ids: " + error); return; }
+				if (!ids || !/^tt\d+$/.test(ids.imdb_id || "")) { finish("в TMDB нет IMDb ID"); return; }
+				entry.imdb = ids.imdb_id;
+				var url = "https://v3-cinemeta.strem.io/meta/series/" + entry.imdb + ".json";
+				_this.makeRequest(url, "native", function (data, error, elapsed) {
+					entry.net = "v3-cinemeta.strem.io " + (error || "OK") + " " + elapsed + "ms";
+					if (error) { finish("Cinemeta: " + error); return; }
+					var meta = data && data.meta;
+					if (!meta || (meta.imdb_id || meta.id) !== entry.imdb) { finish("Cinemeta: сериал не найден"); return; }
+					entry.map = _this.buildMap(meta.videos);
+					finish(entry.map ? null : "Cinemeta: нет полной последовательной нумерации серий");
+				});
+			});
+		},
+
+		reportResponse: function (tvId, requested, data, inputCount) {
+			var entry = this.season_cache[tvId];
+			this.debug("Ответ", "последний: tv=" + tvId + "; запрос S" + requested + " → S" + data.season_number + "; TMDB=" + inputCount + ", отдано=" + data.episodes.length);
+			this.debug("База", entry && entry.map ? "Cinemeta " + entry.imdb + " | " + this.mapSummary(entry.map) : "TMDB; " + (entry && entry.error || "внешняя разметка не запрашивалась"));
+			this.debug("Статус", entry && entry.net || "подключён; TVmaze не используется");
+			this.debug("Ошибка", entry && entry.error || "—");
+			var descriptions = data.episodes.filter(function (ep) { return ep && ep.overview; }).length;
+			var images = data.episodes.filter(function (ep) { return ep && ep.still_path; }).length;
+			this.debug("Данные", "с описанием=" + descriptions + "; с кадром=" + images + "; ID эпизодов TMDB сохранены");
+		},
+
+		hookRequest: function (params) {
+			if (!params || params.season_fix_wrapped || typeof params.complite !== "function") return;
+			var match = String(params.url || "").match(/\/tv\/(\d+)\/season\/(\d+)(?:\?|$)/);
+			if (!match) return;
+			params.season_fix_wrapped = true;
+			var _this = this;
+			var tvId = match[1];
+			var requested = Number(match[2]);
+			var complete = params.complite;
+			if (requested === 1) this.ensureMap(tvId);
+			params.complite = function (data) {
+				var context = this;
+				var args = arguments;
+				if (!data || !Array.isArray(data.episodes)) return complete.apply(context, args);
+				var deliver = function () {
+					var previous = _this.current_tv_id;
+					_this.current_tv_id = tvId;
+					var inputCount = data.episodes.length;
+					_this.debug("Разбиение", "сезон TMDB без переразметки");
+					try {
+						return complete.apply(context, args);
+					} finally {
+						_this.current_tv_id = previous;
+						_this.reportResponse(tvId, requested, data, inputCount);
+					}
+				};
+				if (requested === 1) {
+					_this.debug("Статус", "tv=" + tvId + "; ожидание разметки Cinemeta");
+					_this.ensureMap(tvId, deliver);
+				} else return deliver();
+			};
+		},
+
 		hook: function () {
 			if (this.hooked) return true;
-			if (typeof Lampa === "undefined" || !Lampa.Utils || typeof Lampa.Utils.splitEpisodesIntoSeasons !== "function") return false;
+			if (typeof Lampa === "undefined" || !Lampa.Utils || typeof Lampa.Utils.splitEpisodesIntoSeasons !== "function" || !Lampa.Listener || !Lampa.Reguest) return false;
 			var _this = this;
 			var originalSplit = Lampa.Utils.splitEpisodesIntoSeasons;
 			this.split_override = function (episodes, gap) {
 				if (!Array.isArray(episodes) || !episodes.length) return originalSplit.apply(this, arguments);
 				var seasons = _this.splitBySeasonNumber(episodes);
-				_this.debug("Вход", "tv=" + (episodes[0] && (episodes[0].show_id || episodes[0].series_id) || "?") + "; серий=" + episodes.length);
-				if (!seasons) {
-					_this.debug("Результат", "нет корректного season_number — штатное разбиение Lampa");
-					_this.debug("Данные", "—");
-					return originalSplit.apply(this, arguments);
-				}
-				_this.debug("Результат", Object.keys(seasons).map(function (season) {
-					return "S" + season + ": " + seasons[season].length + " серий";
-				}).join("; "));
-				var descriptions = 0;
-				var images = 0;
-				for (var i = 0; i < episodes.length; i++) {
-					if (episodes[i].overview) descriptions++;
-					if (episodes[i].still_path) images++;
-				}
-				_this.debug("Данные", "с описанием=" + descriptions + "; с кадром=" + images + "; номера и ID сохранены");
+				if (!seasons) return originalSplit.apply(this, arguments);
+				var tvId = episodes[0].show_id || episodes[0].series_id || _this.current_tv_id;
+				var entry = tvId && _this.season_cache[tvId];
+				var mapped = entry && entry.map && _this.splitByMap(episodes, entry.map);
+				if (mapped) seasons = mapped;
+				var counts = {};
+				Object.keys(seasons).forEach(function (season) { counts[season] = seasons[season].length; });
+				_this.debug("Разбиение", (mapped ? "Cinemeta: " : "сохранены сезоны TMDB: ") + _this.mapSummary(counts));
 				return seasons;
 			};
 			Lampa.Utils.splitEpisodesIntoSeasons = this.split_override;
+			Lampa.Listener.follow("request_before", function (event) { _this.hookRequest(event.params); });
 			this.hooked = true;
 			this.debug("Статус", "подключён; ожидание серий; TVmaze не используется");
 			return true;
