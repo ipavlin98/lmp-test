@@ -3,7 +3,7 @@
 
 	var SEASON_FIX = {
 		id: "season_fix",
-		version: "1.6-debug2",
+		version: "1.6-debug3",
 		debug_enabled: true,
 		debug_rows: {},
 		debug_timer: null,
@@ -12,6 +12,10 @@
 		tvmaze_pending: {},
 		tvmaze_retry_after: {},
 		current_tv_id: null,
+
+		canUseTvmazeHttp: function () {
+			return location.protocol === "file:" && /Tizen/i.test(navigator.userAgent);
+		},
 
 		debug: function (key, value) {
 			if (!this.debug_enabled) return;
@@ -330,6 +334,7 @@
 			this.debug("Episodes", "waiting");
 			this.debug("Error", "—");
 			var finished = false;
+			var timeout = this.canUseTvmazeHttp() ? 30000 : 15000;
 			var finish = function (map) {
 				if (finished) return;
 				finished = true;
@@ -337,6 +342,7 @@
 				var callbacks = _this.tvmaze_pending[tvId];
 				delete _this.tvmaze_pending[tvId];
 				if (map) {
+					_this.debug("Error", "—");
 					_this.debug("Episodes", "tv=" + tvId + " map=" + Object.keys(map).map(function (s) { return s + ":" + map[s]; }).join(" "));
 					_this.tvmaze_cache[tvId] = map;
 					delete _this.tvmaze_retry_after[tvId];
@@ -353,9 +359,9 @@
 				}
 			};
 			var timer = setTimeout(function () {
-				_this.debug("Error", "tv=" + tvId + " total timeout 15s");
+				_this.debug("Error", "tv=" + tvId + " total timeout " + timeout / 1000 + "s");
 				finish(null);
-			}, 15000);
+			}, timeout);
 
 			if (
 				!apiKey &&
@@ -450,6 +456,8 @@
 
 		makeRequest: function (url, callback) {
 			var _this = this;
+			var canUseHttp = this.canUseTvmazeHttp() && /^https:\/\/api\.tvmaze\.com\/(?:lookup\/shows\?|shows\/\d+\/episodes(?:\?|$))/.test(url);
+			if (canUseHttp && this.tvmaze_http) url = url.replace(/^https:/, "http:");
 			var stage = url.indexOf("external_ids") >= 0 ? "IDs" : url.indexOf("lookup/shows") >= 0 ? "Lookup" : "Episodes";
 			var host = url.match(/^(?:https?:)?\/\/([^/?#]+)/);
 			var started = Date.now();
@@ -462,7 +470,8 @@
 			var finish = function (data, status, error) {
 				if (completed) return;
 				completed = true;
-				_this.debugNetwork(stage, transport + " " + (error || (transport === "XHR" ? status : "OK")) + " " + (Date.now() - transportStarted) + "ms");
+				_this.debugNetwork(stage, transport + " " + (error || (transport.indexOf("XHR") === 0 ? status : "OK")) + " " + (Date.now() - transportStarted) + "ms");
+				if (!error && data && canUseHttp && url.indexOf("http:") === 0) _this.tvmaze_http = true;
 				if (error) _this.debug("Error", stage + " " + (host ? host[1] : "?") + " status=" + status + " " + error + " " + (Date.now() - started) + "ms");
 				callback(data, status, error);
 			};
@@ -508,7 +517,12 @@
 			var useXHR = function () {
 				if (completed || fallbackStarted) return;
 				fallbackStarted = true;
-				transport = "XHR";
+				if (canUseHttp && url.indexOf("https:") === 0) {
+					url = url.replace(/^https:/, "http:");
+					endpoint = url.split(/[?#]/)[0];
+					_this.debugNetwork(stage, "fallback=" + endpoint);
+				}
+				transport = "XHR/" + url.split(":")[0];
 				transportStarted = Date.now();
 				try {
 					var xhr = new XMLHttpRequest();
@@ -546,7 +560,8 @@
 				}
 			};
 
-			useLampaReguest();
+			if (canUseHttp && this.tvmaze_http) useXHR();
+			else useLampaReguest();
 		}
 	};
 
