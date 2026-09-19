@@ -3,10 +3,11 @@
 
 	var SEASON_FIX = {
 		id: "season_fix",
-		version: "1.6-debug1",
+		version: "1.6-debug2",
 		debug_enabled: true,
 		debug_rows: {},
 		debug_timer: null,
+		debug_network: {},
 		tvmaze_cache: {},
 		tvmaze_pending: {},
 		tvmaze_retry_after: {},
@@ -14,10 +15,53 @@
 
 		debug: function (key, value) {
 			if (!this.debug_enabled) return;
-			value = String(value).replace(/https?:\/\/[^\s)]+/g, "[url]").slice(0, 140);
+			value = String(value).replace(/https?:\/\/[^\s)]+/g, function (url) {
+				return url.split(/[?#]/)[0].replace(/\/\/[^/@]+@/, "//");
+			}).slice(0, 180);
 			if (this.debug_rows[key] === value) return;
 			this.debug_rows[key] = value;
 			this.debugShow();
+		},
+
+		debugNetwork: function (stage, value) {
+			var entries = this.debug_network[stage] || [];
+			entries.push(value);
+			this.debug_network[stage] = entries.slice(-3);
+			this.debug(stage + " net", this.debug_network[stage].join(" > "));
+		},
+
+		debugPanel: function () {
+			if (!document.body) return false;
+			if (this.debug_panel) return true;
+			var _this = this;
+			var template = typeof Lampa !== "undefined" && Lampa.Noty && Lampa.Noty.render ? Lampa.Noty.render() : null;
+			var source = template && (template[0] || template);
+			var panel = source && source.cloneNode ? source.cloneNode(true) : document.createElement("div");
+			panel.id = "season-fix-debug";
+			panel.className = "noty noty--visible";
+			panel.style.cssText = "position:fixed!important;left:12px!important;right:12px!important;bottom:12px!important;top:auto!important;width:auto!important;max-width:1050px!important;max-height:55vh!important;overflow:auto!important;display:block!important;visibility:visible!important;opacity:1!important;transform:none!important;z-index:2147483647!important;pointer-events:auto!important;background:#10241f!important;color:#fff!important;padding:10px 14px!important;border:1px solid #55d6a0!important;border-radius:6px!important;font-size:16px!important;line-height:1.3!important;text-align:left!important;box-sizing:border-box!important;user-select:text!important;";
+			var body = panel.querySelector(".noty__body");
+			if (body) body.style.cssText = "display:block!important;padding:0!important;background:none!important;color:inherit!important;max-width:none!important;";
+			var content = panel.querySelector(".noty__text");
+			if (!content) {
+				content = document.createElement("div");
+				panel.appendChild(content);
+			}
+			content.style.cssText = "display:block!important;font-size:inherit!important;line-height:inherit!important;white-space:normal!important;overflow-wrap:break-word!important;color:inherit!important;";
+			var toggle = document.createElement("button");
+			toggle.type = "button";
+			toggle.textContent = "SF: скрыть";
+			toggle.style.cssText = "position:fixed;right:12px;top:12px;z-index:2147483647;background:#10241f;color:#fff;border:1px solid #55d6a0;border-radius:4px;padding:6px 10px;font:14px sans-serif;cursor:pointer;";
+			toggle.onclick = function () {
+				_this.debug_hidden = !_this.debug_hidden;
+				panel.style.setProperty("display", _this.debug_hidden ? "none" : "block", "important");
+				toggle.textContent = _this.debug_hidden ? "SF: показать" : "SF: скрыть";
+			};
+			document.body.appendChild(panel);
+			document.body.appendChild(toggle);
+			this.debug_panel = panel;
+			this.debug_content = content;
+			return true;
 		},
 
 		debugShow: function () {
@@ -25,7 +69,7 @@
 			if (!this.debug_enabled || this.debug_timer) return;
 			this.debug_timer = setTimeout(function () {
 				_this.debug_timer = null;
-				if (typeof Lampa === "undefined" || !Lampa.Noty || !Lampa.Noty.show) {
+				if (!_this.debugPanel()) {
 					_this.debugShow();
 					return;
 				}
@@ -33,15 +77,15 @@
 					return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 				};
 				var rows = ["Season Fix " + _this.version + " | " + new Date().toTimeString().slice(0, 8)];
-				["Boot", "Card", "Req", "IDs", "Lookup", "Episodes", "Split", "Error"].forEach(function (key) {
+				["Boot", "Page", "UA", "Card", "Req", "IDs", "IDs net", "Lookup", "Lookup net", "Episodes", "Episodes net", "Split", "Error"].forEach(function (key) {
 					var value = _this.debug_rows[key] || "—";
 					if (key === "Boot") value = value.replace(/ready=(true|false)/, "ready=" + !!window.appready);
 					rows.push(key + ": " + escape(value));
 				});
-				if (_this.split_override && Lampa.Utils.splitEpisodesIntoSeasons !== _this.split_override) {
+				if (_this.split_override && Lampa.Utils && Lampa.Utils.splitEpisodesIntoSeasons !== _this.split_override) {
 					rows[1] += " | SPLIT REPLACED";
 				}
-				Lampa.Noty.show('<div style="font-size:0.72em;line-height:1.3;max-width:70vw;overflow-wrap:break-word">' + rows.join("<br>") + "</div>", { time: 120000 });
+				_this.debug_content.innerHTML = rows.join("<br>");
 			}, 700);
 		},
 
@@ -59,6 +103,13 @@
 
 		init: function () {
 			var _this = this;
+			this.debug("Page", location.protocol + "//" + (location.host || "local") + " online=" + navigator.onLine + " secure=" + !!window.isSecureContext);
+			this.debug("UA", navigator.userAgent);
+			window.addEventListener("securitypolicyviolation", function (e) {
+				if (String(e.blockedURI).indexOf("tvmaze.com") >= 0) {
+					_this.debug("Error", "CSP " + e.effectiveDirective + " blocked=" + e.blockedURI);
+				}
+			});
 			var waitForLampa = function () {
 				try {
 					_this.hook();
@@ -270,6 +321,10 @@
 			}
 
 			this.tvmaze_pending[tvId] = callback ? [callback] : [];
+			["IDs", "Lookup", "Episodes"].forEach(function (stage) {
+				_this.debug_network[stage] = [];
+				_this.debug(stage + " net", "—");
+			});
 			this.debug("IDs", "tv=" + tvId + " loading");
 			this.debug("Lookup", "waiting");
 			this.debug("Episodes", "waiting");
@@ -400,9 +455,14 @@
 			var started = Date.now();
 			var completed = false;
 			var fallbackStarted = false;
+			var transport = "Lampa";
+			var transportStarted = started;
+			var endpoint = url.split(/[?#]/)[0];
+			this.debugNetwork(stage, endpoint);
 			var finish = function (data, status, error) {
 				if (completed) return;
 				completed = true;
+				_this.debugNetwork(stage, transport + " " + (error || (transport === "XHR" ? status : "OK")) + " " + (Date.now() - transportStarted) + "ms");
 				if (error) _this.debug("Error", stage + " " + (host ? host[1] : "?") + " status=" + status + " " + error + " " + (Date.now() - started) + "ms");
 				callback(data, status, error);
 			};
@@ -422,12 +482,14 @@
 						url.indexOf("themoviedb.org") !== -1 ||
 						url.indexOf("apitmdb.") !== -1;
 					var method = isTmdbUrl ? "silent" : "native";
+					transport = "Lampa." + method;
 
 					var successCb = function (data) {
 						finish(data, 200, null);
 					};
 
 					var errorCb = function (e, x) {
+						_this.debugNetwork(stage, transport + " " + (e && e.status || 0) + "/" + (x || "error") + " " + (Date.now() - transportStarted) + "ms");
 						_this.debug("Error", stage + " Lampa status=" + (e && e.status || 0) + " " + (x || "error") + " -> XHR");
 						useXHR();
 					};
@@ -446,12 +508,16 @@
 			var useXHR = function () {
 				if (completed || fallbackStarted) return;
 				fallbackStarted = true;
+				transport = "XHR";
+				transportStarted = Date.now();
 				try {
 					var xhr = new XMLHttpRequest();
 					xhr.open("GET", url, true);
 					xhr.timeout = 5000;
 
 					xhr.onload = function () {
+						var finalUrl = xhr.responseURL ? xhr.responseURL.split(/[?#]/)[0] : "";
+						if (finalUrl && finalUrl !== endpoint) _this.debugNetwork(stage, "redirect=" + finalUrl);
 						if (xhr.status >= 200 && xhr.status < 300) {
 							var data;
 							try {
