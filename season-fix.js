@@ -3,7 +3,7 @@
 
 	var SEASON_FIX = {
 		id: "season_fix",
-		version: "1.6-debug3",
+		version: "1.6-debug4",
 		debug_enabled: true,
 		debug_rows: {},
 		debug_timer: null,
@@ -32,6 +32,140 @@
 			entries.push(value);
 			this.debug_network[stage] = entries.slice(-3);
 			this.debug(stage + " net", this.debug_network[stage].join(" > "));
+		},
+
+		debugConfig: function () {
+			var _this = this;
+			this.debug("Clock", new Date().toISOString());
+			if (!this.debug_rows.Policy) this.debug("Policy", "no CSP event observed");
+			try {
+				var app = window.tizen && tizen.application && tizen.application.getCurrentApplication().appInfo;
+				this.debug("App", app ? app.id + " v" + app.version : "browser");
+			} catch (e) {
+				this.debug("App", e.name + " " + e.message);
+			}
+			if (location.protocol !== "file:") {
+				this.debug("Config", "not a packaged app");
+				return;
+			}
+			try {
+				var xhr = new XMLHttpRequest();
+				xhr.open("GET", location.href.split(/[?#]/)[0].replace(/[^/]*$/, "config.xml"), true);
+				xhr.timeout = 5000;
+				xhr.onload = function () {
+					var xml = new DOMParser().parseFromString(xhr.responseText, "text/xml");
+					if (xml.getElementsByTagName("parsererror").length || !xml.getElementsByTagName("widget").length) {
+						_this.debug("Config", "unavailable or invalid XML; status=" + xhr.status);
+						return;
+					}
+					var origins = [];
+					var policies = [];
+					var internet = false;
+					var elements = xml.getElementsByTagName("*");
+					for (var i = 0; i < elements.length; i++) {
+						var node = elements[i];
+						var name = node.localName || node.nodeName.split(":").pop();
+						if (name === "access") origins.push(node.getAttribute("origin") + " sub=" + node.getAttribute("subdomains"));
+						if (name === "privilege" && /\/internet$/.test(node.getAttribute("name") || "")) internet = true;
+						if (name === "content-security-policy" || name === "allow-origin") policies.push(node.textContent);
+					}
+					var relevant = origins.filter(function (origin) { return /tvmaze|\*/i.test(origin); });
+					_this.debug("Config", "internet=" + internet + " access(" + origins.length + ")=" + ((relevant.length ? relevant : origins).join("; ") || "none"));
+					_this.debug("App policy", policies.join("; ") || "no explicit CSP/allow-origin in config");
+				};
+				xhr.onerror = function () { _this.debug("Config", "read error"); };
+				xhr.ontimeout = function () { _this.debug("Config", "read timeout"); };
+				xhr.send();
+			} catch (e) {
+				this.debug("Config", e.name + " " + e.message);
+			}
+		},
+
+		debugProbes: function (lookupUrl) {
+			if (!this.debug_enabled || this.debug_probes_started) return;
+			this.debug_probes_started = true;
+			this.debug_page = "network";
+			var _this = this;
+			var remaining = 4;
+			this.debugConfig();
+			this.debug("Probes", "running: direct=/shows/1; lookup=current show; limit=8s");
+			var finish = function (label, result) {
+				_this.debug(label, result);
+				remaining--;
+				if (!remaining) _this.debug("Probes", "DONE 4/4; direct=/shows/1; rs=readyState; hdr=headers received");
+			};
+			var probe = function (label, url) {
+				if (location.protocol === "https:" && url.indexOf("http:") === 0) {
+					finish(label, "skipped: HTTPS page / mixed content");
+					return;
+				}
+				var xhr;
+				var settled = false;
+				var headers = false;
+				var started = Date.now();
+				var complete = function (event) {
+					if (settled) return;
+					settled = true;
+					clearTimeout(timer);
+					var details = "";
+					try {
+						details = " status=" + xhr.status + " rs=" + xhr.readyState + " hdr=" + headers + " bytes=" + xhr.responseText.length + " final=" + (xhr.responseURL || "none");
+					} catch (e) {
+						details = " " + e.name;
+					}
+					finish(label, event + " " + (Date.now() - started) + "ms" + details);
+				};
+				var timer = setTimeout(function () {
+					complete("watchdog");
+					if (xhr) xhr.abort();
+				}, 8500);
+				_this.debug(label, "loading");
+				try {
+					xhr = new XMLHttpRequest();
+					xhr.open("GET", url, true);
+					xhr.timeout = 8000;
+					xhr.onreadystatechange = function () { if (xhr.readyState >= 2 && xhr.status) headers = true; };
+					xhr.onload = function () { complete("load"); };
+					xhr.onerror = function () { complete("error"); };
+					xhr.ontimeout = function () { complete("timeout"); };
+					xhr.onabort = function () { complete("abort"); };
+					xhr.send();
+				} catch (e) {
+					complete(e.name + ": " + e.message);
+				}
+			};
+			probe("Direct HTTP", "http://api.tvmaze.com/shows/1");
+			probe("Direct HTTPS", "https://api.tvmaze.com/shows/1");
+			probe("Lookup HTTP", lookupUrl.replace(/^https:/, "http:"));
+			if (typeof fetch !== "function") {
+				finish("Fetch opaque", "unsupported");
+				return;
+			}
+			var started = Date.now();
+			var settled = false;
+			var controller;
+			var completeFetch = function (result) {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				finish("Fetch opaque", result + " " + (Date.now() - started) + "ms");
+			};
+			var timer = setTimeout(function () {
+				completeFetch("timeout");
+				if (controller) controller.abort();
+			}, 8000);
+			try {
+				if (typeof AbortController === "function") controller = new AbortController();
+				var options = { mode: "no-cors", credentials: "omit", cache: "no-store" };
+				if (controller) options.signal = controller.signal;
+				fetch("https://api.tvmaze.com/shows/1", options).then(function (response) {
+					completeFetch("resolved type=" + response.type + " status=" + response.status);
+				}, function (error) {
+					completeFetch(error.name + ": " + error.message);
+				});
+			} catch (e) {
+				completeFetch(e.name + ": " + e.message);
+			}
 		},
 
 		debugPanel: function () {
@@ -63,6 +197,14 @@
 			};
 			document.body.appendChild(panel);
 			document.body.appendChild(toggle);
+			var page = toggle.cloneNode(true);
+			page.textContent = "SF: сводка / сеть";
+			page.style.right = "130px";
+			page.onclick = function () {
+				_this.debug_page = _this.debug_page === "network" ? "summary" : "network";
+				_this.debugShow();
+			};
+			document.body.appendChild(page);
 			this.debug_panel = panel;
 			this.debug_content = content;
 			return true;
@@ -81,7 +223,8 @@
 					return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 				};
 				var rows = ["Season Fix " + _this.version + " | " + new Date().toTimeString().slice(0, 8)];
-				["Boot", "Page", "UA", "Card", "Req", "IDs", "IDs net", "Lookup", "Lookup net", "Episodes", "Episodes net", "Split", "Error"].forEach(function (key) {
+				var keys = _this.debug_page === "network" ? ["Boot", "Page", "Clock", "App", "Config", "App policy", "Policy", "Probes", "Direct HTTP", "Direct HTTPS", "Lookup HTTP", "Fetch opaque", "Error"] : ["Boot", "Page", "UA", "Card", "Req", "IDs", "IDs net", "Lookup", "Lookup net", "Episodes", "Episodes net", "Split", "Error"];
+				keys.forEach(function (key) {
 					var value = _this.debug_rows[key] || "—";
 					if (key === "Boot") value = value.replace(/ready=(true|false)/, "ready=" + !!window.appready);
 					rows.push(key + ": " + escape(value));
@@ -111,7 +254,7 @@
 			this.debug("UA", navigator.userAgent);
 			window.addEventListener("securitypolicyviolation", function (e) {
 				if (String(e.blockedURI).indexOf("tvmaze.com") >= 0) {
-					_this.debug("Error", "CSP " + e.effectiveDirective + " blocked=" + e.blockedURI);
+					_this.debug("Policy", "CSP " + e.effectiveDirective + " blocked=" + e.blockedURI);
 				}
 			});
 			var waitForLampa = function () {
@@ -352,6 +495,7 @@
 				callbacks.forEach(function (call) {
 					setTimeout(call, 0);
 				});
+				if (_this.debug_lookup_url) setTimeout(function () { _this.debugProbes(_this.debug_lookup_url); }, 0);
 				if (map) {
 					var event = document.createEvent("CustomEvent");
 					event.initCustomEvent("tvmaze_loaded", false, false, { id: tvId });
@@ -417,6 +561,7 @@
 
 				var lookupUrl =
 					"https://api.tvmaze.com/lookup/shows?" + lookupType + "=" + lookupId;
+				_this.debug_lookup_url = lookupUrl;
 				_this.debug("Lookup", lookupType + "=" + lookupId + " loading");
 
 				_this.makeRequest(lookupUrl, function (showData, status2, error2) {
