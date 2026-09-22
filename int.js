@@ -21,6 +21,7 @@
 
 	addStyles();
 	initializeSettings();
+	setupHistoryCaptions();
 
 	siStyleSetupVoteColorsObserver();
 	siStyleSetupVoteColorsForDetailPage();
@@ -455,6 +456,21 @@
 		};
 	}
 
+	function setupHistoryCaptions() {
+		function update(object) {
+			if (!object || !object.activity) return;
+			object.activity.render().toggleClass(
+				"new-interface-history",
+				object.component === "favorite" && object.type === "history"
+			);
+		}
+
+		Lampa.Listener.follow("activity", function (event) {
+			if (event.type === "init" || event.type === "start") update(event.object);
+		});
+		Lampa.Activity.all().forEach(update);
+	}
+
 	function addStyles() {
 		if (addStyles.added) return;
 		addStyles.added = true;
@@ -608,7 +624,11 @@
 			}
 			.logo-moved-head { transition: opacity 0.4s ease; }
 			.logo-moved-separator { transition: opacity 0.4s ease; }
-			${Lampa.Storage.get("hide_captions", true) ? ".card:not(.card--collection) .card__age, .card:not(.card--collection) .card__title { display: none !important; }" : ""}
+			.items-line .card:not(.card--collection) .card__age,
+			.items-line .card:not(.card--collection) .card__title {
+				display: none !important;
+			}
+			${Lampa.Storage.get("hide_captions", true) ? ".new-interface-history .card:not(.card--collection) .card__age, .new-interface-history .card:not(.card--collection) .card__title { display: none !important; }" : ""}
 				</style>`;
 	}
 
@@ -1582,8 +1602,8 @@
 			component: "style_interface",
 			param: { name: "hide_captions", type: "trigger", default: true },
 			field: {
-				name: "Скрывать названия и год",
-				description: "Лампа будет перезагружена"
+				name: "Скрывать названия и год в истории просмотров",
+				description: "Скрывает подписи под карточками только в истории просмотров. Лампа будет перезагружена"
 			},
 			onChange: function () {
 				window.location.reload();
