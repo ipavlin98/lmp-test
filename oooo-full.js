@@ -8,13 +8,10 @@
 	var STORAGE_KEY_SERVER_TOKENS = "lamponline_server_tokens";
 	var STORAGE_KEY_SERVER_UIDS = "lamponline_server_uids";
 	var STORAGE_KEY_BWA = "bwaesgcmkey";
-	var STORAGE_KEY_BWA_REZKA_MIRROR = "lamponline_bwa_rezka_mirror";
 	var BWA_SERVER = "https://rc.bwa.ad";
 	var bwaRevision = 0;
 	var bwaImportCancel;
 	var bwaStoredKey;
-	var bwaStoredMirror;
-	var bwaKitSync;
 
 	function isBwaServer(url) {
 		return typeof url === "string" && /^(?:https?:\/\/)?(?:rc\.)?bwa\.ad(?:\/(?:rc\/?)?)?$/i.test(url.trim());
@@ -33,10 +30,6 @@
 		return /^[A-Za-z0-9+/]{43}=$/.test(key);
 	}
 
-	function getBwaRezkaMirror() {
-		return rezkaAddress(persistentGet(STORAGE_KEY_BWA_REZKA_MIRROR, "https://kvk.zone"), false);
-	}
-
 	function setBwaKey(key) {
 		if (getBwaKey() === key) return;
 		persistentSet(STORAGE_KEY_BWA, key);
@@ -44,12 +37,10 @@
 	}
 
 	function bwaKeyChanged() {
-		if (bwaStoredKey === getBwaKey() && bwaStoredMirror === getBwaRezkaMirror()) return;
+		if (bwaStoredKey === getBwaKey()) return;
 		bwaStoredKey = getBwaKey();
-		bwaStoredMirror = getBwaRezkaMirror();
 		bwaRevision++;
 		if (bwaImportCancel) bwaImportCancel(true);
-		if (bwaKitSync) bwaKitSync.cancel();
 		searchBalansersCache = Object.create(null);
 		if (isBwaServer(getServerUrl())) {
 			RchController.closeHost(getHostKey());
@@ -58,84 +49,6 @@
 			if (active && active.component === "lamponline" && !$('body').hasClass('settings--open'))
 				Lampa.Activity.replace({lampac_custom_select: ""});
 		}
-	}
-
-	function syncBwaKit() {
-		var key = getBwaKey();
-		if (!isBwaServer(getServerUrl()) || !validBwaKey(key)) return Promise.resolve(false);
-		var mirror = getBwaRezkaMirror();
-		if (bwaKitSync && bwaKitSync.key === key && bwaKitSync.mirror === mirror) return bwaKitSync.promise;
-		if (bwaKitSync) bwaKitSync.cancel();
-		var entry = {key: key, mirror: mirror, network: new Lampa.Reguest()};
-		bwaKitSync = entry;
-		entry.network.timeout(10000);
-		entry.promise = new Promise(function (resolve, reject) {
-			var settled = false;
-			var reloadTimer;
-			function finish(error, changed) {
-				if (settled) return;
-				settled = true;
-				clearTimeout(reloadTimer);
-				entry.network.clear();
-				if (error) reject(error); else resolve(changed);
-			}
-			entry.cancel = function () {
-				var error = new Error("Сервер или ключ BWA изменён");
-				error.cancelled = true;
-				finish(error);
-			};
-			function current() {
-				if (bwaKitSync === entry && key === getBwaKey() && entry.mirror === getBwaRezkaMirror() && isBwaServer(getServerUrl())) return true;
-				entry.cancel();
-				return false;
-			}
-			function failed() {
-				if (current()) finish(new Error("Не удалось синхронизировать настройки Rezka с BWA Kit. Повторите открытие фильма или проверьте доступность Kit."));
-			}
-			var form = "aesGcmKey=" + encodeURIComponent(key);
-			var options = {type: "POST", dataType: "text"};
-			entry.network["native"](BWA_SERVER + "/kit", function (html) {
-				if (!current()) return;
-				try {
-					var match = typeof html === "string" && html.match(/<textarea\b(?=[^>]*\bid\s*=\s*['"]value['"])[^>]*>([\s\S]*?)<\/textarea>/i);
-					if (!match) return failed();
-					var textarea = document.createElement("textarea");
-					textarea.innerHTML = match[1];
-					var config = JSON.parse(textarea.value);
-					if (!config || typeof config !== "object" || Array.isArray(config)) return failed();
-					var legacy = config.RezkaPrem;
-					var baseSettings = legacy && typeof legacy === "object" && !Array.isArray(legacy) ? legacy : config.Rezka;
-					if (!baseSettings || typeof baseSettings !== "object" || Array.isArray(baseSettings)) return finish(null, false);
-					var settings = JSON.parse(JSON.stringify(baseSettings));
-					if (!settings.host) settings.host = entry.mirror;
-					if (!settings.scheme) settings.scheme = "https";
-					if (typeof settings.rhub !== "boolean") settings.rhub = false;
-					if (typeof settings.rhub_fallback !== "boolean") settings.rhub_fallback = true;
-					var currentSettings = config.Rezka;
-					var names = Object.keys(settings);
-					if (currentSettings && typeof currentSettings === "object" && !Array.isArray(currentSettings) &&
-						Object.keys(currentSettings).length === names.length && names.every(function (name) {
-							return JSON.stringify(currentSettings[name]) === JSON.stringify(settings[name]);
-						})) return finish(null, false);
-					config.Rezka = settings;
-					entry.network["native"](BWA_SERVER + "/kit", function (result) {
-						if (!current()) return;
-						try {
-							if (JSON.parse(result).success !== true) return failed();
-							searchBalansersCache = Object.create(null);
-							reloadTimer = setTimeout(function () { if (current()) finish(null, true); }, 5000);
-						} catch (e) { failed(); }
-					}, failed, form + "&json=" + encodeURIComponent(JSON.stringify(config)), options);
-				} catch (e) { failed(); }
-			}, failed, form, options);
-		}).then(function (changed) {
-			if (bwaKitSync === entry) bwaKitSync = null;
-			return changed;
-		}, function (error) {
-			if (bwaKitSync === entry) bwaKitSync = null;
-			throw error;
-		});
-		return entry.promise;
 	}
 
 	function serverRequest(network, method, url, success, error, data, options) {
@@ -233,9 +146,8 @@
 
 	function initBwaSettings() {
 		bwaStoredKey = getBwaKey();
-		bwaStoredMirror = getBwaRezkaMirror();
 		Lampa.Storage.listener.follow("change", function (event) {
-			if (event.name === STORAGE_KEY_BWA || event.name === STORAGE_KEY_BWA_REZKA_MIRROR) bwaKeyChanged();
+			if (event.name === STORAGE_KEY_BWA) bwaKeyChanged();
 		});
 		Lampa.Settings.listener.follow("close", function () {
 			if (bwaImportCancel) bwaImportCancel(true);
@@ -252,27 +164,6 @@
 				item.on("hover:enter", function () { openBwaInput(function () { Lampa.Settings.update(); }); });
 			}
 		});
-		// Lampa.SettingsApi.addParam({
-		// 	component: "lamponline_settings",
-		// 	param: {name: STORAGE_KEY_BWA_REZKA_MIRROR, type: "static"},
-		// 	field: {
-		// 		name: "BWA — зеркало Rezka",
-		// 		description: "Укажите HTTPS-адрес сайта, с которого взяты Cookie Rezka. По умолчанию https://kvk.zone. Адрес, заданный для Rezka в BWA Kit, имеет приоритет."
-		// 	},
-		// 	onRender: function (item) {
-		// 		item.find(".settings-param__value").text(getBwaRezkaMirror());
-		// 		item.on("hover:enter", function () {
-		// 			Lampa.Input.edit({title: "BWA — зеркало Rezka", value: getBwaRezkaMirror(), placeholder: "https://kvk.zone", nosave: true, free: true, nomic: true}, function (value) {
-		// 				if (value == null) return;
-		// 				try {
-		// 					persistentSet(STORAGE_KEY_BWA_REZKA_MIRROR, rezkaAddress(value, false));
-		// 					bwaKeyChanged();
-		// 					Lampa.Settings.update();
-		// 				} catch (e) { Lampa.Noty.show(e.message); }
-		// 			});
-		// 		});
-		// 	}
-		// });
 	}
 
 	function persistentGet(key, defaultValue) {
@@ -346,8 +237,7 @@
 		STORAGE_KEY_SERVER_COUNTRIES,
 		STORAGE_KEY_SERVER_TOKENS,
 		STORAGE_KEY_SERVER_UIDS,
-		STORAGE_KEY_BWA,
-		STORAGE_KEY_BWA_REZKA_MIRROR
+		STORAGE_KEY_BWA
 	];
 
 	function backupServerData() {
@@ -883,7 +773,6 @@
 	var ServerManager = {
 		changed: function (previous) {
 			if (previous === getServerUrl()) return;
-			if (bwaKitSync) bwaKitSync.cancel();
 			RchController.closeHost(previous.replace(/^https?:\/\//, ""));
 			ensureRchNws();
 			var active = Lampa.Activity.active();
@@ -2683,10 +2572,7 @@
 		this.createSource = function () {
 			var _this4 = this;
 			var token = generation;
-			return syncBwaKit()["catch"](function (error) {
-				if (error.cancelled) throw error;
-				if (!destroyed && token === generation) Lampa.Noty.show(error.message);
-			}).then(function () {
+			return Promise.resolve().then(function () {
 				if (destroyed || token !== generation) throw cancellationError();
 				return new Promise(function (resolve) {
 					var rch = ensureRchNws();
@@ -4003,7 +3889,7 @@
 			var bwaRezka = isBwaServer(getServerUrl()) && balanser === "rezka";
 			if (bwaRezka && !(er && er.accsdb)) {
 				html.find(".online-empty__title").text("Rezka через BWA не вернула видео");
-				html.find(".online-empty__time").text("Проверьте Cookie Rezka в BWA Kit и настройку «BWA — зеркало Rezka»: укажите сайт, с которого взяты Cookie. Без Cookie источник может требовать вход или проверку защиты сайта.");
+				html.find(".online-empty__time").text("Проверьте Cookie и зеркало Rezka в BWA Kit: укажите сайт, с которого взяты Cookie. Без Cookie источник может требовать вход или проверку защиты сайта.");
 			}
 
 			var tic = bwaRezka || er && er.accsdb ? 10 : 5;
