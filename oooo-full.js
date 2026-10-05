@@ -2532,7 +2532,7 @@
 		function selectedSourceTitle() {
 			var selected = sources[balanser];
 			return selected && typeof selected.name === "string" && selected.name.trim()
-				? safeUiText(selected.name) : "…";
+				? safeUiText(selected.name) : "...";
 		}
 
 		function updateSourceItems() {
