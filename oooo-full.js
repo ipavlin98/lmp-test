@@ -7,6 +7,270 @@
 	var STORAGE_KEY_SERVER_COUNTRIES = "lamponline_server_countries";
 	var STORAGE_KEY_SERVER_TOKENS = "lamponline_server_tokens";
 	var STORAGE_KEY_SERVER_UIDS = "lamponline_server_uids";
+	var STORAGE_KEY_BWA = "bwaesgcmkey";
+	var STORAGE_KEY_BWA_REZKA_MIRROR = "lamponline_bwa_rezka_mirror";
+	var BWA_SERVER = "https://rc.bwa.ad";
+	var bwaRevision = 0;
+	var bwaImportCancel;
+	var bwaStoredKey;
+	var bwaStoredMirror;
+	var bwaKitSync;
+
+	function isBwaServer(url) {
+		return typeof url === "string" && /^(?:https?:\/\/)?(?:rc\.)?bwa\.ad(?:\/(?:rc\/?)?)?$/i.test(url.trim());
+	}
+
+	function normalizeServerInput(url) {
+		return typeof url === "string" ? (isBwaServer(url) ? BWA_SERVER : url.trim()) : "";
+	}
+
+	function getBwaKey() {
+		var key = persistentGet(STORAGE_KEY_BWA, "");
+		return typeof key === "string" ? key.trim() : "";
+	}
+
+	function validBwaKey(key) {
+		return /^[A-Za-z0-9+/]{43}=$/.test(key);
+	}
+
+	function getBwaRezkaMirror() {
+		return rezkaAddress(persistentGet(STORAGE_KEY_BWA_REZKA_MIRROR, "https://kvk.zone"), false);
+	}
+
+	function setBwaKey(key) {
+		if (getBwaKey() === key) return;
+		persistentSet(STORAGE_KEY_BWA, key);
+		bwaKeyChanged();
+	}
+
+	function bwaKeyChanged() {
+		if (bwaStoredKey === getBwaKey() && bwaStoredMirror === getBwaRezkaMirror()) return;
+		bwaStoredKey = getBwaKey();
+		bwaStoredMirror = getBwaRezkaMirror();
+		bwaRevision++;
+		if (bwaImportCancel) bwaImportCancel(true);
+		if (bwaKitSync) bwaKitSync.cancel();
+		searchBalansersCache = Object.create(null);
+		if (isBwaServer(getServerUrl())) {
+			RchController.closeHost(getHostKey());
+			ensureRchNws();
+			var active = Lampa.Activity.active();
+			if (active && active.component === "lamponline" && !$('body').hasClass('settings--open'))
+				Lampa.Activity.replace({lampac_custom_select: ""});
+		}
+	}
+
+	function syncBwaKit() {
+		var key = getBwaKey();
+		if (!isBwaServer(getServerUrl()) || !validBwaKey(key)) return Promise.resolve(false);
+		var mirror = getBwaRezkaMirror();
+		if (bwaKitSync && bwaKitSync.key === key && bwaKitSync.mirror === mirror) return bwaKitSync.promise;
+		if (bwaKitSync) bwaKitSync.cancel();
+		var entry = {key: key, mirror: mirror, network: new Lampa.Reguest()};
+		bwaKitSync = entry;
+		entry.network.timeout(10000);
+		entry.promise = new Promise(function (resolve, reject) {
+			var settled = false;
+			var reloadTimer;
+			function finish(error, changed) {
+				if (settled) return;
+				settled = true;
+				clearTimeout(reloadTimer);
+				entry.network.clear();
+				if (error) reject(error); else resolve(changed);
+			}
+			entry.cancel = function () {
+				var error = new Error("Сервер или ключ BWA изменён");
+				error.cancelled = true;
+				finish(error);
+			};
+			function current() {
+				if (bwaKitSync === entry && key === getBwaKey() && entry.mirror === getBwaRezkaMirror() && isBwaServer(getServerUrl())) return true;
+				entry.cancel();
+				return false;
+			}
+			function failed() {
+				if (current()) finish(new Error("Не удалось синхронизировать настройки Rezka с BWA Kit. Повторите открытие фильма или проверьте доступность Kit."));
+			}
+			var form = "aesGcmKey=" + encodeURIComponent(key);
+			var options = {type: "POST", dataType: "text"};
+			entry.network["native"](BWA_SERVER + "/kit", function (html) {
+				if (!current()) return;
+				try {
+					var match = typeof html === "string" && html.match(/<textarea\b(?=[^>]*\bid\s*=\s*['"]value['"])[^>]*>([\s\S]*?)<\/textarea>/i);
+					if (!match) return failed();
+					var textarea = document.createElement("textarea");
+					textarea.innerHTML = match[1];
+					var config = JSON.parse(textarea.value);
+					if (!config || typeof config !== "object" || Array.isArray(config)) return failed();
+					var legacy = config.RezkaPrem;
+					if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return finish(null, false);
+					var settings = JSON.parse(JSON.stringify(legacy));
+					if (!settings.host) settings.host = entry.mirror;
+					if (!settings.scheme) settings.scheme = "https";
+					var currentSettings = config.Rezka;
+					var names = Object.keys(settings);
+					if (currentSettings && typeof currentSettings === "object" && !Array.isArray(currentSettings) &&
+						Object.keys(currentSettings).length === names.length && names.every(function (name) {
+							return JSON.stringify(currentSettings[name]) === JSON.stringify(settings[name]);
+						})) return finish(null, false);
+					config.Rezka = settings;
+					entry.network["native"](BWA_SERVER + "/kit", function (result) {
+						if (!current()) return;
+						try {
+							if (JSON.parse(result).success !== true) return failed();
+							searchBalansersCache = Object.create(null);
+							reloadTimer = setTimeout(function () { if (current()) finish(null, true); }, 5000);
+						} catch (e) { failed(); }
+					}, failed, form + "&json=" + encodeURIComponent(JSON.stringify(config)), options);
+				} catch (e) { failed(); }
+			}, failed, form, options);
+		}).then(function (changed) {
+			if (bwaKitSync === entry) bwaKitSync = null;
+			return changed;
+		}, function (error) {
+			if (bwaKitSync === entry) bwaKitSync = null;
+			throw error;
+		});
+		return entry.promise;
+	}
+
+	function serverRequest(network, method, url, success, error, data, options) {
+		options = $.extend({}, options);
+		var key = getBwaKey();
+		if (validBwaKey(key) && isBwaServer(getServerUrl())) {
+			try {
+				var target = new URL(url, BWA_SERVER + "/");
+				if (target.origin === BWA_SERVER) {
+					url = target.href;
+					options.headers = $.extend({}, options.headers, {"X-Kit-AesGcm": key});
+				}
+			} catch (e) {}
+		}
+		return network[method](url, success, error, data, options);
+	}
+
+	function bwaAccessMessage(error) {
+		if (!isBwaServer(getServerUrl())) return "";
+		if (!validBwaKey(getBwaKey())) return "Ключ BWA не задан или имеет неверный формат. Введите ключ AesGcm или ссылку привязки из bwa.ad/kit.";
+		if (error && (error.status === 401 || error.status === 403))
+			return "BWA отклонил доступ. Проверьте ключ AesGcm и настройки нужного источника в bwa.ad/kit.";
+		return "";
+	}
+
+	function openBwaInput(callback) {
+		var activity = Lampa.Activity.active();
+		var controller = Lampa.Controller.enabled().name;
+		function finish() {
+			if (Lampa.Activity.active() !== activity) return;
+			Lampa.Controller.toggle(controller);
+			if (callback) callback();
+		}
+		Lampa.Input.edit({
+			title: "Ключ AesGcm, ссылка привязки или код BWA",
+			value: getBwaKey(),
+			placeholder: "https://rc.bwa.ad/u/…",
+			type: "password",
+			nosave: true,
+			free: true,
+			nomic: true
+		}, function (value) {
+			if (Lampa.Activity.active() !== activity) return;
+			if (value == null || !value.trim()) return finish();
+			value = value.trim();
+			function save(key) {
+				setBwaKey(key);
+				addServer(BWA_SERVER);
+				var servers = getServersList();
+				var index = servers.findIndex(function (server) { return isBwaServer(server); });
+				setActiveServerIndex(index);
+				Lampa.Noty.show("BWA добавлен. Ключ сохранён.");
+				finish();
+			}
+			if (validBwaKey(value)) return save(value);
+			var link = value.match(/^(?:https:\/\/)?rc\.bwa\.ad\/u\/([A-Za-z0-9_-]{1,64})\/?$/i);
+			var code = link ? link[1] : /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : "";
+			if (!code) {
+				Lampa.Noty.show("Введите полный ключ AesGcm из Kit, ссылку https://rc.bwa.ad/u/код или код из этой ссылки.");
+				return finish();
+			}
+			if (bwaImportCancel) bwaImportCancel(true);
+			var revision = bwaRevision;
+			var network = new Lampa.Reguest();
+			var settled = false;
+			function complete(message, key, discard) {
+				if (settled) return;
+				settled = true;
+				bwaImportCancel = null;
+				network.clear();
+				Lampa.Loading.stop();
+				if (discard || revision !== bwaRevision || Lampa.Activity.active() !== activity) return;
+				if (key) save(key);
+				else {
+					if (message) Lampa.Noty.show(message);
+					finish();
+				}
+			}
+			bwaImportCancel = function (discard) { complete(null, null, discard === true); };
+			Lampa.Controller.toggle(controller);
+			Lampa.Loading.start(bwaImportCancel);
+			network.timeout(15000);
+			network["native"](BWA_SERVER + "/u/" + encodeURIComponent(code), function (script) {
+				var match = typeof script === "string" && script.length < 16384 &&
+					script.match(/Lampa\s*\.\s*Storage\s*\.\s*set\s*\(\s*(['"])bwaesgcmkey\1\s*,\s*(['"])([A-Za-z0-9+/]{43}=)\2\s*(?:,\s*true\s*)?\)/);
+				if (!match || !validBwaKey(match[3])) return complete("Ссылка привязки недействительна или истекла. Получите новую ссылку в bwa.ad/kit (она действует 20 минут) либо вставьте постоянный ключ AesGcm.");
+				complete(null, match[3]);
+			}, function (error) {
+				complete(error && (error.status === 404 || error.status === 410)
+					? "Ссылка привязки истекла или не найдена. Получите новую ссылку в bwa.ad/kit."
+					: "Не удалось получить ключ BWA. Проверьте подключение и ссылку или вставьте постоянный ключ AesGcm из Kit.");
+			}, false, {dataType: "text"});
+		});
+	}
+
+	function initBwaSettings() {
+		bwaStoredKey = getBwaKey();
+		bwaStoredMirror = getBwaRezkaMirror();
+		Lampa.Storage.listener.follow("change", function (event) {
+			if (event.name === STORAGE_KEY_BWA || event.name === STORAGE_KEY_BWA_REZKA_MIRROR) bwaKeyChanged();
+		});
+		Lampa.Settings.listener.follow("close", function () {
+			if (bwaImportCancel) bwaImportCancel(true);
+		});
+		Lampa.SettingsApi.addParam({
+			component: "lamponline_settings",
+			param: {name: "lamponline_bwa", type: "static"},
+			field: {
+				name: "Добавить сервер BWA",
+				description: "Введите ключ AesGcm из https://bwa.ad/kit или ссылку привязки https://rc.bwa.ad/u/код. Можно ввести только код. Ссылка действует 20 минут; сохранённый ключ остаётся на устройстве. При открытии фильма настройки Rezka, включая Premium и Cookie, автоматически согласуются с BWA Kit."
+			},
+			onRender: function (item) {
+				item.find(".settings-param__name").text(getBwaKey() ? "BWA — изменить ключ / подключить" : "Добавить сервер BWA");
+				item.on("hover:enter", function () { openBwaInput(function () { Lampa.Settings.update(); }); });
+			}
+		});
+		Lampa.SettingsApi.addParam({
+			component: "lamponline_settings",
+			param: {name: STORAGE_KEY_BWA_REZKA_MIRROR, type: "static"},
+			field: {
+				name: "BWA — зеркало Rezka",
+				description: "Укажите HTTPS-адрес сайта, с которого взяты Cookie Rezka. По умолчанию https://kvk.zone. Адрес, заданный для Rezka в BWA Kit, имеет приоритет."
+			},
+			onRender: function (item) {
+				item.find(".settings-param__value").text(getBwaRezkaMirror());
+				item.on("hover:enter", function () {
+					Lampa.Input.edit({title: "BWA — зеркало Rezka", value: getBwaRezkaMirror(), placeholder: "https://kvk.zone", nosave: true, free: true, nomic: true}, function (value) {
+						if (value == null) return;
+						try {
+							persistentSet(STORAGE_KEY_BWA_REZKA_MIRROR, rezkaAddress(value, false));
+							bwaKeyChanged();
+							Lampa.Settings.update();
+						} catch (e) { Lampa.Noty.show(e.message); }
+					});
+				});
+			}
+		});
+	}
 
 	function persistentGet(key, defaultValue) {
 		try {
@@ -78,7 +342,9 @@
 		STORAGE_KEY_ACTIVE_SERVER,
 		STORAGE_KEY_SERVER_COUNTRIES,
 		STORAGE_KEY_SERVER_TOKENS,
-		STORAGE_KEY_SERVER_UIDS
+		STORAGE_KEY_SERVER_UIDS,
+		STORAGE_KEY_BWA,
+		STORAGE_KEY_BWA_REZKA_MIRROR
 	];
 
 	function backupServerData() {
@@ -134,10 +400,11 @@
 	}
 
 	function addServer(url) {
+		url = normalizeServerInput(url);
 		if (typeof url !== "string" || !url.trim()) return false;
 		var previous = getServerUrl();
 		var servers = getServersList();
-		if (servers.indexOf(url) === -1) {
+		if (!servers.some(function (server) { return normalizeServerInput(server) === url; })) {
 			servers.push(url);
 			persistentSet(STORAGE_KEY_SERVERS, servers);
 			ServerManager.changed(previous);
@@ -192,7 +459,7 @@
 		if (servers.length === 0) return "";
 		var index = getActiveServerIndex();
 		var url = servers[index] || "";
-		return url ? Lampa.Utils.checkHttp(url.replace(/\/+$/, ""), true) : "";
+		return url ? Lampa.Utils.checkHttp(normalizeServerInput(url).replace(/\/+$/, ""), true) : "";
 	}
 
 	function getHostKey() {
@@ -212,6 +479,7 @@
 	}
 
 	function formatServerDisplay(url) {
+		if (isBwaServer(url)) return "BWA (rc.bwa.ad)";
 		var displayName = (typeof url === "string" ? url : "").replace(/^https?:\/\//, "");
 		var country = getServerCountry(url);
 		if (country) {
@@ -325,7 +593,7 @@
 			searchBalansersCache[url] = new Promise(function (resolve, reject) {
 				var net = new Lampa.Reguest();
 				net.timeout(10000);
-				net.silent(url, function (json) {
+				serverRequest(net, "silent", url, function (json) {
 					resolve(Array.isArray(json) ? json : []);
 				}, reject);
 			})["catch"](function (error) {
@@ -612,6 +880,7 @@
 	var ServerManager = {
 		changed: function (previous) {
 			if (previous === getServerUrl()) return;
+			if (bwaKitSync) bwaKitSync.cancel();
 			RchController.closeHost(previous.replace(/^https?:\/\//, ""));
 			ensureRchNws();
 			var active = Lampa.Activity.active();
@@ -659,6 +928,11 @@
 		if (!hasUrlParameter(url, "uid")) {
 			var uid = getCurrentServerUid() || Lampa.Storage.get("lampac_unic_id", "") || "guest";
 			url = Lampa.Utils.addUrlComponent(url, "uid=" + encodeURIComponent(uid));
+		}
+
+		if (!hasUrlParameter(url, "nws_id")) {
+			var nwsId = Lampa.Storage.get("lampac_nws_id", "");
+			if (nwsId) url = Lampa.Utils.addUrlComponent(url, "nws_id=" + encodeURIComponent(nwsId));
 		}
 
 		var email = Lampa.Storage.get("account_email", "");
@@ -1505,6 +1779,7 @@
 		var balanser;
 		var initialized;
 		var initial_server = getServerUrl();
+		var initial_bwa_revision = bwaRevision;
 		var awaiting_setup = false;
 		var refresh_timer;
 		var balanser_timer;
@@ -1520,12 +1795,13 @@
 		var refreshAfterSetup = function () {
 			var active = Lampa.Activity.active();
 			if (destroyed || !active || active.activity !== this.activity || $('body').hasClass('settings--open')) return false;
-			if (initial_server === getServerUrl() && !(awaiting_setup && rezkaAuthorized())) return false;
+			var bwaChanged = isBwaServer(getServerUrl()) && initial_bwa_revision !== bwaRevision;
+			if (initial_server === getServerUrl() && !bwaChanged && !(awaiting_setup && rezkaAuthorized())) return false;
 			clearTimeout(refresh_timer);
 			refresh_timer = setTimeout(function () {
 				var current = Lampa.Activity.active();
 				if (destroyed || !current || current.activity !== active.activity || $('body').hasClass('settings--open')) return;
-				Lampa.Activity.replace({lampac_custom_select: initial_server !== getServerUrl() ? "" : REZKA_SOURCE});
+				Lampa.Activity.replace({lampac_custom_select: initial_server !== getServerUrl() || bwaChanged ? "" : REZKA_SOURCE});
 			}, 0);
 			return true;
 		}.bind(this);
@@ -1610,7 +1886,7 @@
 					function cancel() { finish(cancellationError()); }
 					cancel.network = network;
 					pendingRequests.push(cancel);
-					network.silent(
+					serverRequest(network, "silent",
 						url,
 						function (json) {
 							finish(null, json);
@@ -1730,6 +2006,12 @@
 		})();
 
 		var PlayerAdapter = (function () {
+			function playbackUrl(url) {
+				if (isBwaServer(getServerUrl()) && balanser === "rezka" && location.protocol === "https:" && typeof url === "string")
+					return url.replace(/(^| or )http:\/\//gi, "$1https://");
+				return url;
+			}
+
 			function toPlayElement(file, stream, details) {
 				stream = stream || file;
 				details = details || {};
@@ -1738,7 +2020,7 @@
 					lamponline_stream: true,
 					isonline: true,
 					title: file.title,
-					url: stream.url,
+					url: playbackUrl(stream.url),
 					headers: details.headers || stream.headers || file.headers,
 					quality: quality && typeof quality === "object" ? $.extend({}, quality) : quality,
 					timeline: file.timeline,
@@ -1751,6 +2033,13 @@
 					episode: file.episode,
 					voice_name: file.voice_name
 				};
+				if (play.quality && typeof play.quality === "object") {
+					Object.keys(play.quality).forEach(function (name) {
+						var value = play.quality[name];
+						play.quality[name] = value && typeof value === "object" && typeof value.url === "string"
+							? $.extend({}, value, {url: playbackUrl(value.url)}) : playbackUrl(value);
+					});
+				}
 				if (stream.vast && stream.vast.url) {
 					play.vast_url = stream.vast.url;
 					play.vast_msg = stream.vast.msg;
@@ -1805,7 +2094,7 @@
 				if (destroyed || !playing) return;
 				var token = generation;
 				subtitleNetwork.clear();
-				subtitleNetwork.silent(
+				serverRequest(subtitleNetwork, "silent",
 					account(link),
 					function (subs) {
 						if (destroyed || token !== generation || !Array.isArray(subs)) return;
@@ -2094,7 +2383,7 @@
 
 				var reqUrl = account(object.url.replace("rjson=", "nojson="));
 
-				return sourceNetwork["native"](
+				return serverRequest(sourceNetwork, "native",
 					reqUrl,
 					function (response) {
 						if (destroyed) return;
@@ -2385,12 +2674,22 @@
 
 		this.createSource = function () {
 			var _this4 = this;
-			var url = _this4.requestParams(
-				Config.Urls.getLocalhost() + "lite/events?life=true"
-			);
-
-			sourceNetwork.timeout(15000);
-			return NetworkManager.silentPromise(sourceNetwork, url).then(function (json) {
+			var token = generation;
+			return syncBwaKit()["catch"](function (error) {
+				if (error.cancelled) throw error;
+				if (!destroyed && token === generation) Lampa.Noty.show(error.message);
+			}).then(function () {
+				if (destroyed || token !== generation) throw cancellationError();
+				return new Promise(function (resolve) {
+					var rch = ensureRchNws();
+					if (rch) rch.typeInvoke(getServerUrl(), resolve); else resolve();
+				});
+			}).then(function () {
+				if (destroyed || token !== generation) throw cancellationError();
+				var url = _this4.requestParams(Config.Urls.getLocalhost() + "lite/events?life=true");
+				sourceNetwork.timeout(15000);
+				return NetworkManager.silentPromise(sourceNetwork, url);
+			}).then(function (json) {
 				if (destroyed) return;
 				if (json.accsdb) return Promise.reject(json);
 
@@ -2476,7 +2775,7 @@
 			cancelRequests(sourceNetwork);
 
 			if (number_of_requests < 10) {
-				sourceNetwork["native"](
+				serverRequest(sourceNetwork, "native",
 					finalUrl,
 					function (response) {
 						if (destroyed || token !== generation || request_token !== request_generation) return;
@@ -2629,7 +2928,7 @@
 					streamNetwork.clear();
 				});
 				cancelRequests(streamNetwork);
-				streamNetwork["native"](
+				serverRequest(streamNetwork, "native",
 					account(file.url),
 					function (json) {
 						if (destroyed || cancelled || token !== generation) return;
@@ -2777,6 +3076,7 @@
 			var json = Lampa.Arrays.decodeJson(str, {});
 			if (Lampa.Arrays.isObject(str) && str.rch) json = str;
 			if (json && json.rch) return this.rch(json);
+			if (json && json.accsdb) return this.doesNotAnswer(json);
 
 			try {
 				var items = this.parseJsonDate(str, ".videos__item");
@@ -3659,12 +3959,14 @@
 
 		this.noConnectToServer = function (er) {
 			if (destroyed) return;
+			var bwaMessage = bwaAccessMessage(er);
 			var html = Lampa.Template.get("lampac_does_not_answer", {});
 			html.find(".cancel").on("hover:enter", function () {
 				Lampa.Activity.backward();
 			});
-			html.find(".change").text("Выбрать сервер").on("hover:enter", function () {
-				openServerMenu();
+			html.find(".change").text(bwaMessage ? "Настроить BWA" : "Выбрать сервер").on("hover:enter", function () {
+				if (bwaMessage) openBwaInput();
+				else openServerMenu();
 			});
 			html
 				.find(".online-empty__title")
@@ -3672,7 +3974,7 @@
 			html
 				.find(".online-empty__time")
 				.text(
-					er && er.accsdb
+					bwaMessage ? bwaMessage : er && er.accsdb
 						? er.msg
 						: Lampa.Lang.translate("lampac_server_unavailable_desc")
 				);
@@ -3683,14 +3985,20 @@
 
 		this.doesNotAnswer = function (er) {
 			if (destroyed) return;
+			if (bwaAccessMessage(er)) return this.noConnectToServer(er);
 			var _this9 = this;
 			this.reset();
 			var html = Lampa.Template.get("lampac_does_not_answer", {
 				balanser: balanser
 			});
 			if (er && er.accsdb) html.find(".online-empty__title").text(er.msg);
+			var bwaRezka = isBwaServer(getServerUrl()) && balanser === "rezka";
+			if (bwaRezka && !(er && er.accsdb)) {
+				html.find(".online-empty__title").text("Rezka через BWA не вернула видео");
+				html.find(".online-empty__time").text("Проверьте Cookie Rezka в BWA Kit и настройку «BWA — зеркало Rezka»: укажите сайт, с которого взяты Cookie. Без Cookie источник может требовать вход или проверку защиты сайта.");
+			}
 
-			var tic = er && er.accsdb ? 10 : 5;
+			var tic = bwaRezka || er && er.accsdb ? 10 : 5;
 			html.find(".cancel").on("hover:enter", function () {
 				clearInterval(balanser_timer);
 			});
@@ -3872,7 +4180,7 @@
 						};
 
 						keys.forEach(function (name) {
-							network.silent(
+							serverRequest(network, "silent",
 								account(links[name]),
 								function (data) {
 									if (token !== generation) return;
@@ -3889,7 +4197,7 @@
 					}
 				}
 
-				network.silent(
+				serverRequest(network, "silent",
 					account(
 						Config.Urls.getLocalhost() +
 							"lite/" +
@@ -3902,7 +4210,7 @@
 						if (json && json.rch) {
 							rchRun(json, function () {
 								if (token !== generation) return;
-								network.silent(
+							serverRequest(network, "silent",
 									account(
 										Config.Urls.getLocalhost() +
 											"lite/" +
@@ -4484,6 +4792,8 @@
 							nomic: true
 						},
 						function (new_value) {
+							if (isBwaServer(new_value) && !validBwaKey(getBwaKey()))
+								return openBwaInput(function () { Lampa.Settings.update(); });
 							if (new_value && addServer(new_value)) {
 								var servers = getServersList();
 								setActiveServerIndex(servers.length - 1);
@@ -4495,6 +4805,8 @@
 				});
 			}
 		});
+
+		initBwaSettings();
 
 		Lampa.SettingsApi.addParam({
 			component: "lamponline_settings",
@@ -4534,6 +4846,7 @@
 			if (isActive) statusParts.push("Текущий сервер");
 			if (hasToken) statusParts.push("Токен установлен");
 			if (hasUid) statusParts.push("UID: " + getServerUid(server));
+			if (isBwaServer(server)) statusParts.push(getBwaKey() ? "Ключ BWA сохранён" : "Ключ BWA не задан");
 			var statusText = statusParts.join(" • ");
 			var item = $(
 				'<div class="settings-param selector lamponline-server-item" data-server-index="' +
@@ -4579,12 +4892,13 @@
 	}
 
 	function editServer(index, newUrl) {
+		newUrl = normalizeServerInput(newUrl);
 		var previous = getServerUrl();
 		var servers = getServersList();
 		if (typeof index === "number" && index % 1 === 0 && index >= 0 && index < servers.length &&
 			typeof newUrl === "string" && newUrl.trim()) {
 			if (servers.some(function (server, serverIndex) {
-				return serverIndex !== index && server === newUrl;
+				return serverIndex !== index && normalizeServerInput(server) === newUrl;
 			})) return false;
 			var oldUrl = servers[index];
 			if (oldUrl === newUrl) return true;
@@ -4625,6 +4939,10 @@
 				title: Lampa.Lang.translate("lampac_select_this"),
 				select: true
 			});
+		}
+		if (isBwaServer(serverUrl)) {
+			items.push({title: getBwaKey() ? "Изменить ключ BWA" : "Добавить ключ BWA", bwa: true});
+			if (getBwaKey()) items.push({title: "Удалить ключ BWA", removeBwaKey: true});
 		}
 		if (showTokenMenu) {
 			items.push({
@@ -4675,6 +4993,13 @@
 				if (item.select) {
 					setActiveServerIndex(index);
 					ensureRchNws();
+					finish();
+				} else if (item.bwa) {
+					Lampa.Select.close();
+					openBwaInput(finish);
+				} else if (item.removeBwaKey) {
+					setBwaKey("");
+					Lampa.Noty.show("Ключ BWA удалён с устройства.");
 					finish();
 				} else if (item.token) {
 					Lampa.Select.close();
@@ -4772,9 +5097,13 @@
 			},
 			function (new_value) {
 				if (new_value) {
+					if (isBwaServer(new_value) && !validBwaKey(getBwaKey())) return openBwaInput(function () {
+						if (callback) callback(BWA_SERVER);
+					});
+					new_value = normalizeServerInput(new_value);
 					addServer(new_value);
 					var servers = getServersList();
-					setActiveServerIndex(servers.indexOf(new_value));
+					setActiveServerIndex(servers.findIndex(function (server) { return normalizeServerInput(server) === new_value; }));
 					ensureRchNws();
 				}
 				if (Lampa.Activity.active() !== activity) return;
@@ -4818,19 +5147,23 @@
 			title: Lampa.Lang.translate("lampac_add_server"),
 			add: true
 		});
+		items.push({title: "Добавить сервер BWA", bwa: true});
 
 		Lampa.Select.show({
 			title: Lampa.Lang.translate("lampac_select_server"),
 			items: items,
 			onBack: back,
 			onSelect: function (item) {
-				if (item.add) {
+				if (item.bwa) {
+					Lampa.Select.close();
+					openBwaInput(refresh);
+				} else if (item.add) {
 					openServerInput(refresh);
 				} else if (item.selected) {
 					var displayName = formatServerDisplay(servers[item.index]);
 					Lampa.Select.show({
 						title: safeUiText(displayName),
-						items: [
+						items: (isBwaServer(servers[item.index]) ? [{title: getBwaKey() ? "Изменить ключ BWA" : "Добавить ключ BWA", bwa: true}] : []).concat([
 							{
 								title: Lampa.Lang.translate("lampac_edit_server"),
 								edit: true
@@ -4839,12 +5172,15 @@
 								title: Lampa.Lang.translate("lampac_delete_server"),
 								remove: true
 							}
-						],
+						]),
 						onBack: function () {
 							openServerSelect(callback, onBackOverride, context);
 						},
 						onSelect: function (a) {
-							if (a.edit) {
+							if (a.bwa) {
+								Lampa.Select.close();
+								openBwaInput(refresh);
+							} else if (a.edit) {
 								Lampa.Input.edit(
 									{
 										title: Lampa.Lang.translate("lampac_server_address"),
