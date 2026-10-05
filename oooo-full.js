@@ -249,27 +249,27 @@
 				item.on("hover:enter", function () { openBwaInput(function () { Lampa.Settings.update(); }); });
 			}
 		});
-		Lampa.SettingsApi.addParam({
-			component: "lamponline_settings",
-			param: {name: STORAGE_KEY_BWA_REZKA_MIRROR, type: "static"},
-			field: {
-				name: "BWA — зеркало Rezka",
-				description: "Укажите HTTPS-адрес сайта, с которого взяты Cookie Rezka. По умолчанию https://kvk.zone. Адрес, заданный для Rezka в BWA Kit, имеет приоритет."
-			},
-			onRender: function (item) {
-				item.find(".settings-param__value").text(getBwaRezkaMirror());
-				item.on("hover:enter", function () {
-					Lampa.Input.edit({title: "BWA — зеркало Rezka", value: getBwaRezkaMirror(), placeholder: "https://kvk.zone", nosave: true, free: true, nomic: true}, function (value) {
-						if (value == null) return;
-						try {
-							persistentSet(STORAGE_KEY_BWA_REZKA_MIRROR, rezkaAddress(value, false));
-							bwaKeyChanged();
-							Lampa.Settings.update();
-						} catch (e) { Lampa.Noty.show(e.message); }
-					});
-				});
-			}
-		});
+		// Lampa.SettingsApi.addParam({
+		// 	component: "lamponline_settings",
+		// 	param: {name: STORAGE_KEY_BWA_REZKA_MIRROR, type: "static"},
+		// 	field: {
+		// 		name: "BWA — зеркало Rezka",
+		// 		description: "Укажите HTTPS-адрес сайта, с которого взяты Cookie Rezka. По умолчанию https://kvk.zone. Адрес, заданный для Rezka в BWA Kit, имеет приоритет."
+		// 	},
+		// 	onRender: function (item) {
+		// 		item.find(".settings-param__value").text(getBwaRezkaMirror());
+		// 		item.on("hover:enter", function () {
+		// 			Lampa.Input.edit({title: "BWA — зеркало Rezka", value: getBwaRezkaMirror(), placeholder: "https://kvk.zone", nosave: true, free: true, nomic: true}, function (value) {
+		// 				if (value == null) return;
+		// 				try {
+		// 					persistentSet(STORAGE_KEY_BWA_REZKA_MIRROR, rezkaAddress(value, false));
+		// 					bwaKeyChanged();
+		// 					Lampa.Settings.update();
+		// 				} catch (e) { Lampa.Noty.show(e.message); }
+		// 			});
+		// 		});
+		// 	}
+		// });
 	}
 
 	function persistentGet(key, defaultValue) {
@@ -2526,12 +2526,19 @@
 			return items;
 		}
 
+		function selectedSourceTitle() {
+			var selected = sources[balanser];
+			return selected && typeof selected.name === "string" && selected.name.trim()
+				? safeUiText(selected.name) : "…";
+		}
+
 		function updateSourceItems() {
 			filter.set("sort", sourceItems());
+			filter.chosen("sort", [selectedSourceTitle()]);
 			filter.get("filter").forEach(function (item) {
 				if (item.stype === "source") {
 					item.hide = !filter_sources.length;
-					item.subtitle = safeUiText(sources[balanser] ? sources[balanser].name : balanser);
+					item.subtitle = selectedSourceTitle();
 				}
 			});
 		}
@@ -2561,6 +2568,7 @@
 				balanser = fallback;
 			source = sources[balanser].url;
 			Lampa.Storage.set(Config.StorageKeys.ActiveBalanser, balanser);
+			updateSourceItems();
 
 			return Promise.resolve(json);
 		};
@@ -2638,9 +2646,6 @@
 							addRezkaSource();
 							filter_sources = Lampa.Arrays.getKeys(sources);
 							updateSourceItems();
-							filter.chosen("sort", [
-								safeUiText(sources[balanser] ? sources[balanser].name : balanser)
-							]);
 
 							tryResolve(json, false);
 
@@ -3380,7 +3385,7 @@
 				}
 			}
 			filter.chosen("filter", select);
-			filter.chosen("sort", [sources[balanser] ? safeUiText(sources[balanser].name) : balanser === REZKA_SOURCE ? "Rezka" : safeUiText(balanser)]);
+			filter.chosen("sort", [selectedSourceTitle()]);
 		};
 
 		this.getEpisodes = function (season, call) {
