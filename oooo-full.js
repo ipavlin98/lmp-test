@@ -104,10 +104,13 @@
 					var config = JSON.parse(textarea.value);
 					if (!config || typeof config !== "object" || Array.isArray(config)) return failed();
 					var legacy = config.RezkaPrem;
-					if (!legacy || typeof legacy !== "object" || Array.isArray(legacy)) return finish(null, false);
-					var settings = JSON.parse(JSON.stringify(legacy));
+					var baseSettings = legacy && typeof legacy === "object" && !Array.isArray(legacy) ? legacy : config.Rezka;
+					if (!baseSettings || typeof baseSettings !== "object" || Array.isArray(baseSettings)) return finish(null, false);
+					var settings = JSON.parse(JSON.stringify(baseSettings));
 					if (!settings.host) settings.host = entry.mirror;
 					if (!settings.scheme) settings.scheme = "https";
+					if (typeof settings.rhub !== "boolean") settings.rhub = false;
+					if (typeof settings.rhub_fallback !== "boolean") settings.rhub_fallback = true;
 					var currentSettings = config.Rezka;
 					var names = Object.keys(settings);
 					if (currentSettings && typeof currentSettings === "object" && !Array.isArray(currentSettings) &&
@@ -242,7 +245,7 @@
 			param: {name: "lamponline_bwa", type: "static"},
 			field: {
 				name: "Добавить сервер BWA",
-				description: "Введите ключ AesGcm из https://bwa.ad/kit или ссылку привязки https://rc.bwa.ad/u/код. Можно ввести только код. Ссылка действует 20 минут; сохранённый ключ остаётся на устройстве. При открытии фильма настройки Rezka, включая Premium и Cookie, автоматически согласуются с BWA Kit."
+				description: "Введите ключ AesGcm из https://bwa.ad/kit или ссылку привязки https://rc.bwa.ad/u/код. Можно ввести только код. Ссылка действует 20 минут; сохранённый ключ остаётся на устройстве."
 			},
 			onRender: function (item) {
 				item.find(".settings-param__name").text(getBwaKey() ? "BWA — изменить ключ / подключить" : "Добавить сервер BWA");
