@@ -54,19 +54,14 @@
 	function serverRequest(network, method, url, success, error, data, options) {
 		options = $.extend({}, options);
 		var key = getBwaKey();
-		if (isBwaServer(getServerUrl())) {
-			var target;
+		if (validBwaKey(key) && isBwaServer(getServerUrl())) {
 			try {
-				target = new URL(url, BWA_SERVER + "/");
-			} catch (e) {}
-			if (target && target.origin === BWA_SERVER) {
-				if (!validBwaKey(key)) {
-					if (typeof error === "function") error(new Error("Ключ BWA не задан или имеет неверный формат"));
-					return;
+				var target = new URL(url, BWA_SERVER + "/");
+				if (target.origin === BWA_SERVER) {
+					url = target.href;
+					options.headers = $.extend({}, options.headers, {"X-Kit-AesGcm": key});
 				}
-				url = target.href;
-				options.headers = $.extend({}, options.headers, {"X-Kit-AesGcm": key});
-			}
+			} catch (e) {}
 		}
 		return network[method](url, success, error, data, options);
 	}
@@ -505,15 +500,6 @@
 
 	if (!window.rch_nws) window.rch_nws = {};
 
-	function getAndroidVersion() {
-		if (!Lampa.Platform.is("android")) return 0;
-		try {
-			return parseInt(AndroidJS.appVersion().split("-").pop(), 10) || 0;
-		} catch (e) {
-			return 0;
-		}
-	}
-
 	function ensureRchNws() {
 		var hostkey = getHostKey();
 		if (!hostkey) return null;
@@ -526,7 +512,7 @@
 						: undefined,
 				startTypeInvoke: false,
 				rchRegistry: false,
-				apkVersion: getAndroidVersion()
+				apkVersion: 0
 			};
 		}
 		var serverUrl = Config.Urls.getLampOnline();
@@ -583,18 +569,20 @@
 					.then(function () {
 						if (client !== RchController.getClient()) throw new Error("Активный RCH-клиент изменён");
 						if (onError && (!client.socket || client.socket.readyState !== WebSocket.OPEN)) throw new Error("Соединение RCH закрыто");
-						var registry = {
-							version: Config.Rch.RegistryVersion,
-							host: location.host,
-							rchtype: Lampa.Platform.is("android")
-								? "apk"
-								: Lampa.Platform.is("tizen")
-									? "cors"
-									: window.rch_nws[hk].type,
-							apkVersion: window.rch_nws[hk].apkVersion,
-							player: Lampa.Storage.field("player")
-						};
-						client.invoke("RchRegistry", isBwaServer(serverUrl) ? registry : JSON.stringify(registry));
+						client.invoke(
+							"RchRegistry",
+							JSON.stringify({
+								version: Config.Rch.RegistryVersion,
+								host: location.host,
+								rchtype: Lampa.Platform.is("android")
+									? "apk"
+									: Lampa.Platform.is("tizen")
+										? "cors"
+										: window.rch_nws[hk].type,
+								apkVersion: window.rch_nws[hk].apkVersion,
+								player: Lampa.Storage.field("player")
+							})
+						);
 
 						if (client._shouldReconnect && window.rch_nws[hk].rchRegistry) {
 							if (startConnection) startConnection();
@@ -716,14 +704,11 @@
 			var hostkey = getHostKey();
 			if (!hostkey) return Promise.reject(new Error("Сервер не настроен"));
 			if (!json || typeof json.nws !== "string" || !json.nws) return Promise.reject(new Error("Сервер не вернул адрес RCH"));
-			var nwsUrl = json.nws;
-			if (isBwaServer(getServerUrl()) && !hasUrlParameter(nwsUrl, "ver"))
-				nwsUrl = Lampa.Utils.addUrlComponent(nwsUrl, "ver=1");
 			var pending = connections[hostkey];
-			if (pending && pending.url === nwsUrl && (!pending.client ||
+			if (pending && pending.url === json.nws && (!pending.client ||
 				(pending.client === getClient() && pending.client.socket && pending.client.socket.readyState < WebSocket.CLOSING))) return pending.promise;
 			ensureRchNws();
-			var entry = {url: nwsUrl, client: null};
+			var entry = {url: json.nws, client: null};
 			connections[hostkey] = entry;
 			entry.promise = loadClientScript().then(function () {
 				return new Promise(function (resolve, reject) {
@@ -748,7 +733,7 @@
 						if (previous && typeof previous.close === "function") previous.close();
 						else if (previous && previous.socket) previous.socket.close();
 						if (!window.nwsClient) window.nwsClient = {};
-						client = new NativeWsClient(nwsUrl, {
+						client = new NativeWsClient(json.nws, {
 							autoReconnect: false,
 							onError: function () { fail(new Error("Ошибка подключения RCH")); },
 							onClose: function () { fail(new Error("Соединение RCH закрыто")); }
@@ -838,9 +823,7 @@
 		}
 
 		if (!hasUrlParameter(url, "nws_id")) {
-			var rchClient = RchController.getClient();
-			var nwsId = rchClient && rchClient.socket && rchClient.socket.readyState === WebSocket.OPEN
-				? rchClient.connectionId : Lampa.Storage.get("lampac_nws_id", "");
+			var nwsId = Lampa.Storage.get("lampac_nws_id", "");
 			if (nwsId) url = Lampa.Utils.addUrlComponent(url, "nws_id=" + encodeURIComponent(nwsId));
 		}
 
