@@ -196,7 +196,7 @@
 				isCurrent: true,
 			},
 		];
-		if (!cardNode.querySelector(".ep-watched-layer")) drawHTML(cardNode, fallback);
+		cardNode.classList.add("ep-design-active");
 		var request = cardNode.epDesignRequest;
 		loadEpisodes(cardData, progress.season, function (episodes) {
 			if (request !== cardNode.epDesignRequest) return;
