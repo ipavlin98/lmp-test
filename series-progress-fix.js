@@ -3,22 +3,6 @@
 	function injectStyles() {
 		var css = `
 			.card.ep-design-active .card-watched { display: none !important; }
-			.ep-watched-wrap {
-				position: absolute;
-				top: 0;
-				right: 0;
-				bottom: 0;
-				left: 0;
-				z-index: 2;
-				pointer-events: none;
-				opacity: 0;
-				transition: opacity 0.2s ease;
-			}
-			.card.focus .ep-watched-wrap,
-			.card:hover .ep-watched-wrap {
-				opacity: 1;
-				transition-delay: 0.3s;
-			}
 			.ep-watched-layer {
 				position: absolute;
 				left: 0.4em;
@@ -34,12 +18,13 @@
 				display: flex;
 				flex-direction: column;
 				pointer-events: none;
-				overflow: hidden;
-				animation: ep-watched-appear 0.2s ease 0.3s backwards;
+				opacity: 0;
+				transition: opacity 0.2s ease;
 			}
-			@keyframes ep-watched-appear {
-				from { opacity: 0; }
-				to { opacity: 1; }
+			.card.focus .ep-watched-layer.ep-ready,
+			.card:hover .ep-watched-layer.ep-ready {
+				opacity: 1;
+				transition-delay: 0.3s;
 			}
 			.ep-watched-body {
 				font-size: 0.9em;
@@ -126,222 +111,136 @@
 		return variations.concat(extraVariations);
 	}
 	function getSeriesProgress(card) {
-		var Utils = Lampa.Utils;
-		var Storage = Lampa.Storage;
-		var Timeline = Lampa.Timeline;
 		var baseKeys = [card.original_name, card.original_title, card.name, card.title].filter(Boolean);
 		var keys = [];
 		baseKeys.forEach(function (key) {
-			var vars = generateVariations(key);
-			vars.forEach(function (v) {
+			generateVariations(key).forEach(function (v) {
 				if (keys.indexOf(v) === -1) keys.push(v);
 			});
 		});
-		var cache = Storage.get("online_watched_last", "{}");
+		var cache = Lampa.Storage.get("online_watched_last", "{}") || {};
 		var found = null;
-		var foundKey = null;
 		keys.some(function (key) {
-			var hash = Utils.hash(key);
-			if (cache[hash] && cache[hash].episode > 0 && cache[hash].season >= 0) {
-				found = cache[hash];
-				foundKey = key;
+			var item = cache[Lampa.Utils.hash(key)];
+			if (item && item.episode > 0 && item.season >= 0) {
+				found = { season: item.season, episode: item.episode, title: key };
 				return true;
 			}
 		});
-		if (!found && card.id) {
-			var allKeys = Object.keys(cache);
-			allKeys.some(function (hash) {
-				var item = cache[hash];
-				if (item && item.id == card.id && item.episode > 0 && item.season >= 0) {
-					found = item;
-					foundKey = item.title || item.name || item.original_title || item.original_name;
-					return true;
-				}
-			});
-		}
-		if (found) {
-			return {
-				season: found.season,
-				episode: found.episode,
-				title: foundKey || baseKeys[0],
-				fromHistory: true,
-			};
-		}
+		if (found) return found;
 		keys.some(function (key) {
-			var watched = Timeline.watched({ original_name: key }, true);
+			var watched = Lampa.Timeline.watched({ original_name: key }, true);
 			var last = Array.isArray(watched) && watched[watched.length - 1];
 			if (!last) return false;
-			found = { season: 1, episode: last.ep, title: key, fromHistory: false };
+			found = { season: 1, episode: last.ep, title: key };
 			return true;
 		});
 		return found;
 	}
 	function loadEpisodes(card, season, callback) {
-		if (!Lampa.Api || !Lampa.Api.seasons) return callback([]);
-		Lampa.Api.seasons(
-			card,
-			[season],
-			function (data) {
-				if (data && data[season] && Array.isArray(data[season].episodes)) {
-					callback(data[season].episodes);
-				} else {
-					callback([]);
-				}
-			},
-			function () {
-				callback([]);
-			},
-		);
+		try {
+			Lampa.Api.seasons(card, [season], function (data) {
+				callback(data && data[season] && Array.isArray(data[season].episodes) ? data[season].episodes : []);
+			});
+		} catch (e) {
+			callback([]);
+		}
 	}
-	function drawHTML(cardNode, items, isMovieMode) {
+	function escapeHtml(text) {
+		return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+	}
+	function episodeTitle(number, name) {
+		return '<span class="ep-num">' + escapeHtml(number) + " -</span> " + escapeHtml(name);
+	}
+	function drawHTML(cardNode, items) {
 		var viewContainer = cardNode.querySelector(".card__view");
 		if (!viewContainer) return;
-		var layer = cardNode.querySelector(".ep-watched-layer");
-		cardNode.classList.toggle("ep-design-active", !!(items && items.length));
-		if (!items || !items.length) {
-			if (layer) (layer.closest(".ep-watched-wrap") || layer).remove();
+		var layer = viewContainer.querySelector(".ep-watched-layer");
+		cardNode.classList.toggle("ep-design-active", items.length > 0);
+		if (!items.length) {
+			if (layer) layer.remove();
 			return;
 		}
-		if (!layer || !layer.parentNode.classList.contains("ep-watched-wrap")) {
-			var wrap = document.createElement("div");
-			wrap.className = "ep-watched-wrap";
-			layer = layer || document.createElement("div");
+		var html = items
+			.map(function (data) {
+				var line = data.percent > 0 ? '<div class="ep-time-line"><div style="width: ' + data.percent + '%"></div></div>' : "";
+				return '<div class="ep-watched-item' + (data.isCurrent ? " is-active" : "") + '"><span>' + data.title + "</span>" + line + "</div>";
+			})
+			.join("");
+		if (layer && layer.epHtml === html) return;
+		var isNew = !layer;
+		if (isNew) {
+			layer = document.createElement("div");
 			layer.className = "ep-watched-layer";
-			wrap.appendChild(layer);
-			viewContainer.appendChild(wrap);
 		}
-		if (isMovieMode) layer.classList.add("layer--movie");
-		else layer.classList.remove("layer--movie");
-		var body = layer.querySelector(".ep-watched-body");
-		if (!body) {
-			body = document.createElement("div");
-			body.className = "ep-watched-body";
-			layer.appendChild(body);
-		} else {
-			body.innerHTML = "";
+		layer.innerHTML = '<div class="ep-watched-body">' + html + "</div>";
+		layer.epHtml = html;
+		if (isNew) {
+			viewContainer.appendChild(layer);
+			void window.getComputedStyle(layer).opacity;
+			layer.classList.add("ep-ready");
 		}
-		items.forEach(function (data) {
-			var item = document.createElement("div");
-			item.className = "ep-watched-item" + (data.isMovie ? " movie-variant" : "");
-			if (data.isCurrent) {
-				item.classList.add("is-active");
-			}
-			var spanText = document.createElement("span");
-			spanText.innerHTML = data.title;
-			item.appendChild(spanText);
-			if (data.percent > 0) {
-				var timeline = document.createElement("div");
-				timeline.className = "ep-time-line";
-				var bar = document.createElement("div");
-				bar.style.width = data.percent + "%";
-				timeline.appendChild(bar);
-				item.appendChild(timeline);
-			}
-			body.appendChild(item);
-		});
 	}
 	function processSeries(cardNode, cardData) {
 		var progress = getSeriesProgress(cardData);
-		if (!progress) return drawHTML(cardNode, [], false);
-		var titleKey = progress.title || cardData.original_name || cardData.original_title || cardData.name;
-		cardNode.classList.add("ep-design-active");
+		if (!progress) return drawHTML(cardNode, []);
+		var titleKey = progress.title;
+		function percentOf(season, episode) {
+			var view = Lampa.Timeline.view(Lampa.Utils.hash([season, season > 10 ? ":" : "", episode, titleKey].join("")));
+			return (view && view.percent) || 0;
+		}
+		var fallback = [
+			{
+				title: episodeTitle(progress.episode, Lampa.Lang.translate("full_episode") + " " + progress.episode),
+				percent: percentOf(progress.season, progress.episode),
+				isCurrent: true,
+			},
+		];
+		if (!cardNode.querySelector(".ep-watched-layer")) drawHTML(cardNode, fallback);
 		var request = cardNode.epDesignRequest;
 		loadEpisodes(cardData, progress.season, function (episodes) {
 			if (request !== cardNode.epDesignRequest) return;
-			var indexInHistory = episodes.findIndex(function (ep) {
+			var currentIndex = episodes.findIndex(function (ep) {
 				return ep.episode_number == progress.episode;
 			});
-			if (indexInHistory === -1) {
-				drawHTML(cardNode, [], false);
-				cardNode.classList.add("ep-design-active");
-				return;
-			}
-			var lastWatchedIndex = -1;
+			if (currentIndex === -1) return drawHTML(cardNode, fallback);
 			episodes.forEach(function (ep, index) {
-				var hashStr = [ep.season_number, ep.season_number > 10 ? ":" : "", ep.episode_number, titleKey].join("");
-				var view = Lampa.Timeline.view(Lampa.Utils.hash(hashStr));
-				if (view && view.percent > 0) {
-					lastWatchedIndex = index;
-				}
+				if (index > currentIndex && percentOf(ep.season_number, ep.episode_number) > 0) currentIndex = index;
 			});
-			var currentIndex = 0;
-			if (lastWatchedIndex > -1) {
-				currentIndex = lastWatchedIndex;
-			} else {
-				currentIndex = indexInHistory;
-			}
-			var nextEpIndex = currentIndex + 1;
-			var nextEp = episodes[nextEpIndex];
-			var daysToNext = nextEp ? getDaysFromNow(nextEp.air_date) : -1;
-			var nextIsFuture = daysToNext > 0;
-			var listToShow = [];
-			if (nextIsFuture) {
-				listToShow.push(episodes[currentIndex]);
-				if (nextEp) listToShow.push(nextEp);
-			} else {
-				listToShow = episodes.slice(currentIndex, currentIndex + 5);
-			}
+			var nextEp = episodes[currentIndex + 1];
+			var listToShow = nextEp && getDaysFromNow(nextEp.air_date) > 0 ? [episodes[currentIndex], nextEp] : episodes.slice(currentIndex, currentIndex + 5);
 			var itemsToDraw = listToShow.map(function (ep, i) {
-				var isFirstInList = i === 0;
-				var percent = 0;
 				var days = getDaysFromNow(ep.air_date);
 				var isFuture = days > 0;
 				var epName = (ep.name || "").replace(new RegExp("^" + ep.episode_number + "([ .-]|$)"), "").trim();
-				if (!epName || epName === Lampa.Lang.translate("noname")) epName = "";
+				if (epName === Lampa.Lang.translate("noname")) epName = "";
 				if (isFuture) {
-					if (days >= 365) {
-						var years = Math.floor(days / 365);
-						epName = "Осталось лет: " + years;
-					} else if (days >= 30) {
-						var months = Math.floor(days / 30);
-						epName = "Осталось месяцев: " + months;
-					} else if (days >= 7) {
-						var weeks = Math.floor(days / 7);
-						epName = "Осталось недель: " + weeks;
-					} else {
-						epName = "Осталось дней: " + days;
-					}
-				}
-				var titleHtml = '<span class="ep-num">' + ep.episode_number + " -</span> " + epName;
-				if (!isFuture) {
-					var hashStr = [ep.season_number, ep.season_number > 10 ? ":" : "", ep.episode_number, titleKey].join("");
-					var viewData = Lampa.Timeline.view(Lampa.Utils.hash(hashStr));
-					if (viewData) percent = viewData.percent;
+					if (days >= 365) epName = "Осталось лет: " + Math.floor(days / 365);
+					else if (days >= 30) epName = "Осталось месяцев: " + Math.floor(days / 30);
+					else if (days >= 7) epName = "Осталось недель: " + Math.floor(days / 7);
+					else epName = "Осталось дней: " + days;
 				}
 				return {
-					title: titleHtml,
-					percent: percent,
-					isCurrent: isFirstInList,
-					isMovie: false,
+					title: episodeTitle(ep.episode_number, epName),
+					percent: isFuture ? 0 : percentOf(ep.season_number, ep.episode_number),
+					isCurrent: i === 0,
 				};
 			});
-			drawHTML(cardNode, itemsToDraw, false);
+			drawHTML(cardNode, itemsToDraw);
 		});
 	}
 	function processMovie(cardNode, cardData) {
-		var Utils = Lampa.Utils;
-		var Timeline = Lampa.Timeline;
-		var Lang = Lampa.Lang;
 		var key = cardData.original_title || cardData.title;
-		if (!key) return drawHTML(cardNode, [], true);
-		var viewData = Timeline.view(Utils.hash(key));
-		if (!viewData || !viewData.percent) return drawHTML(cardNode, [], true);
-		var statusText = Lang.translate("title_viewed");
-		var timeText = "";
-		if (viewData.time && viewData.time > 0) {
-			timeText = Utils.secondsToTimeHuman(viewData.time);
-		} else {
-			timeText = viewData.percent + "%";
-		}
-		var itemsToDraw = [
+		var viewData = key && Lampa.Timeline.view(Lampa.Utils.hash(key));
+		if (!viewData || !viewData.percent) return drawHTML(cardNode, []);
+		var timeText = viewData.time > 0 ? Lampa.Utils.secondsToTimeHuman(viewData.time) : viewData.percent + "%";
+		drawHTML(cardNode, [
 			{
-				title: statusText + " " + timeText,
+				title: escapeHtml(Lampa.Lang.translate("title_viewed") + " " + timeText),
 				percent: viewData.percent,
 				isCurrent: true,
-				isMovie: true,
 			},
-		];
-		drawHTML(cardNode, itemsToDraw, true);
+		]);
 	}
 	function renderCard(cardNode, cardData) {
 		if (!cardData || cardNode.classList.contains("card--wide")) return;
