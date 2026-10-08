@@ -544,17 +544,27 @@
 			var anchor = render.find(".rate--imdb, .rate--kp, .rate--tmdb, .full-start__rate, .full-start-new__rate").last();
 			if (!anchor.length) return block;
 			block = $('<div class="full-start__rate rate--' + name + '"><div></div>' +
-				(name === "cub" ? '<div class="rating-plugin-reaction"></div>' : '<div></div>') + '</div>');
+				(name === "cub" ? '<span class="rating-plugin-reaction"></span>' : '<div></div>') + '</div>');
 			if (name !== "cub") block.children("div").last().text(label);
 			anchor.after(block);
 		}
 		block.addClass("rating-plugin-rate").removeClass("hide");
 		block.children("div").first().addClass("rating-plugin-value");
 		if (name === "cub") {
-			block.children("div").slice(2).remove();
-			var icon = block.children("div").eq(1);
-			if (!icon.length) icon = $("<div>").appendTo(block);
-			icon.removeClass("rating-plugin-label").addClass("rating-plugin-reaction");
+			var icon = block.children(".rating-plugin-reaction").first();
+			if (!icon.length) icon = block.children("div").eq(1);
+			if (!icon.is("span")) {
+				var replacement = $('<span class="rating-plugin-reaction"></span>');
+				if (icon.length) {
+					replacement.append(icon.contents());
+					var reaction = icon.attr("data-reaction");
+					if (reaction !== undefined) replacement.attr("data-reaction", reaction);
+					icon.remove();
+				}
+				icon = replacement.appendTo(block);
+			}
+			block.children("div").slice(1).remove();
+			block.children(".rating-plugin-label").remove();
 			if (icon.text().trim()) icon.empty();
 			block.attr("aria-label", "Рейтинг CUB");
 		} else block.children("div").last().addClass("rating-plugin-label");
@@ -723,9 +733,10 @@
 			".rating-plugin-empty>.rating-plugin-value,.rating-plugin-empty>.rating-plugin-label{opacity:.4}" +
 			".rating-plugin-value:after{content:'';position:absolute;left:25%;right:25%;bottom:-.18em;height:1px;background:currentColor;opacity:0;transition:opacity .22s ease}" +
 			".rating-plugin-pending>.rating-plugin-value:after{animation:rating-plugin-loading 1.8s ease-in-out infinite}" +
-			".rating-plugin-reaction{width:1.4em;min-width:1.4em;height:1.2em;text-align:center}" +
-			".rating-plugin-reaction img{display:block;width:1.2em;height:1.2em;margin:0 .1em;opacity:0;transition:opacity .22s ease}" +
-			".rating-plugin-reaction img.rating-plugin-image-ready{opacity:1}" +
+			".rate--cub.rating-plugin-rate{display:inline-flex;align-items:center;overflow:visible}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-reaction{display:block;flex:0 0 1.4em;width:1.4em;min-width:1.4em;height:1.2em;padding:0;margin:0;font-size:inherit;line-height:1;overflow:visible;box-sizing:content-box}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-reaction>img{display:block;width:1.2em;height:1.2em;max-width:none;max-height:none;margin:0 .1em;object-fit:contain;opacity:0;transition:opacity .22s ease}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-reaction>img.rating-plugin-image-ready{opacity:1}" +
 			"@keyframes rating-plugin-loading{0%,100%{opacity:.2}50%{opacity:.65}}" +
 			"@media(prefers-reduced-motion:reduce){.rating-plugin-pending>.rating-plugin-value:after{animation:none;opacity:.4}.rating-plugin-value,.rating-plugin-label,.rating-plugin-reaction img{transition:none!important}}"
 		).appendTo("head");
@@ -734,7 +745,11 @@
 	function installSettings() {
 		if (!Lampa.SettingsApi || !Lampa.Input || typeof Lampa.SettingsApi.addComponent !== "function" ||
 			typeof Lampa.SettingsApi.addParam !== "function") return;
-		Lampa.SettingsApi.addComponent({ component: "rating_plugin_settings", name: "Рейтинги" });
+		Lampa.SettingsApi.addComponent({
+			component: "rating_plugin_settings",
+			name: "Рейтинги",
+			icon: '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 L14.8 8.7 L21.1 9.6 L16.5 14.1 L17.6 20.4 L12 17.4 L6.4 20.4 L7.5 14.1 L2.9 9.6 L9.2 8.7 Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>'
+		});
 		Lampa.SettingsApi.addParam({
 			component: "rating_plugin_settings",
 			param: { name: "rating_api_key_edit", type: "static" },
