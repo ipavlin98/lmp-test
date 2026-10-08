@@ -3,6 +3,8 @@
 
 	var defaultApiKey = "cf4d8e72-0ef2-47b7-a5fd-08e7ad3a2939";
 	var apiUrl = "https://kinopoiskapiunofficial.tech/api/v2.2/films";
+	var keywordUrl = "https://kinopoiskapiunofficial.tech/api/v2.1/films/search-by-keyword";
+	var lookupVersion = 2;
 	var cacheName = "rating_cache_v2";
 	var day = 86400000;
 	var retryDelay = 60000;
@@ -49,7 +51,7 @@
 		return isFinite(number) && number > 0 && number <= 10 ? number : 0;
 	}
 
-	function describeCard(data, object) {
+	function describeCard(data, object, complete) {
 		if (!data || typeof data !== "object") return null;
 		object = object || {};
 		var id = positiveId(data.id || data.card_id || object.id);
@@ -70,6 +72,7 @@
 			method: method,
 			key: source + ":" + method + ":" + id,
 			kpId: kpId,
+			complete: !!complete,
 			data: data
 		};
 	}
@@ -141,6 +144,7 @@
 				imdb: imdb || (ratings && ratings.imdb) || 0,
 				at: kp && imdb ? Date.now() : (ratings && ratings.at) || 0,
 				state: kp && imdb ? "ready" : (ratings && ratings.state) || "partial",
+				lookupVersion: kp && imdb ? lookupVersion : (ratings && ratings.lookupVersion) || 0,
 				retryAt: kp && imdb ? 0 : (ratings && ratings.retryAt) || 0
 			};
 			updated = true;
@@ -149,9 +153,22 @@
 	}
 
 	function putRatings(card, kp, imdb) {
+		var previous = getEntry(card).ratings || {};
 		getEntry(card).ratings = {
-			kp: ratingValue(kp), imdb: ratingValue(imdb),
-			at: Date.now(), state: "ready", retryAt: 0
+			kp: ratingValue(kp) || ratingValue(previous.kp),
+			imdb: ratingValue(imdb) || ratingValue(previous.imdb),
+			at: Date.now(), state: "ready", retryAt: 0, lookupVersion: lookupVersion
+		};
+		changed(card);
+	}
+
+	function putPartialRatings(card, kp, imdb) {
+		if (!ratingValue(kp) && !ratingValue(imdb)) return;
+		var previous = getEntry(card).ratings || {};
+		getEntry(card).ratings = {
+			kp: ratingValue(kp) || ratingValue(previous.kp),
+			imdb: ratingValue(imdb) || ratingValue(previous.imdb),
+			at: previous.at || 0, state: "partial", retryAt: 0, lookupVersion: lookupVersion
 		};
 		changed(card);
 	}
@@ -163,6 +180,7 @@
 		ratings.retryAt = Date.now() + (missing ? day : retryDelay);
 		if (error && error.blockedUntil) ratings.retryAt = error.blockedUntil;
 		ratings.failedKey = error && error.apiFingerprint;
+		ratings.lookupVersion = lookupVersion;
 		entry.ratings = ratings;
 		changed(card);
 	}
@@ -170,6 +188,9 @@
 	function needsRatings(card) {
 		var ratings = getEntry(card).ratings;
 		if (!ratings) return true;
+		if (ratings.lookupVersion !== lookupVersion &&
+			(ratings.state === "missing" || (ratings.state === "ready" &&
+			(!ratingValue(ratings.kp) || !ratingValue(ratings.imdb))))) return true;
 		if (ratings.retryAt > Date.now() &&
 			(!ratings.failedKey || ratings.failedKey === keyFingerprint(apiKey()))) return false;
 		return ratings.state !== "ready" || Date.now() - ratings.at >= day;
@@ -358,18 +379,18 @@
 				return;
 			}
 			var type = item.type;
-			if (type && type !== "ALL") {
-				var isTv = type === "TV_SERIES" || type === "MINI_SERIES" || type === "TV_SHOW";
-				if ((card.method === "tv") !== isTv) return;
-			}
-			var titles = [item.nameOriginal, item.nameEn, item.nameRu].map(normalizeTitle);
+			var titles = [item.nameOriginal || item.orig_title, item.nameEn || item.en_title,
+				item.nameRu || item.ru_title || item.title].map(normalizeTitle);
 			var score = original && titles.indexOf(original) !== -1 ? 8 :
 				title && titles.indexOf(title) !== -1 ? 6 : 0;
 			if (!score) return;
-			var itemYear = parseInt(item.year, 10);
+			var itemYear = parseInt(item.year || item.start_date, 10);
 			if (year && itemYear) {
-				if (Math.abs(year - itemYear) > 1) return;
-				score += year === itemYear ? 4 : 1;
+				score += year === itemYear ? 4 : Math.abs(year - itemYear) === 1 ? 1 : 0;
+			}
+			if (type && type !== "ALL") {
+				var isTv = type === "TV_SERIES" || type === "MINI_SERIES" || type === "TV_SHOW";
+				if ((card.method === "tv") === isTv) score += 2;
 			}
 			candidates.push({ item: item, score: score });
 		});
@@ -378,13 +399,11 @@
 			candidates[0].item : null;
 	}
 
-	function keywordQuery(card, title) {
+	function keywordQuery(title) {
 		if (!title) return "";
-		var query = "?keyword=" + encodeURIComponent(title);
-		var year = parseInt(String(card.data.release_date || card.data.first_air_date || "").slice(0, 4), 10);
-		if (year >= 1001 && year <= 9998) query += "&yearFrom=" + (year - 1) + "&yearTo=" + (year + 1);
-		if (card.method === "movie") query += "&type=FILM";
-		return query;
+		var cleaned = String(title).replace(/[\s.,:;'\u0060!?]+/g, " ").trim()
+			.replace(/^[ \/\\]+|[ \/\\]+$/g, "").replace(/( *[\/\\]+ *)+/g, "+");
+		return keywordUrl + "?keyword=" + encodeURIComponent(cleaned);
 	}
 
 	function fetchRatings(card, paid) {
@@ -400,6 +419,8 @@
 		}
 		var entry = getEntry(card);
 		if (!paid && !entry.kpId) return;
+		var imdbId = card.data.imdb_id || (card.data.external_ids && card.data.external_ids.imdb_id);
+		if (!entry.kpId && !card.complete && !/^tt\d+$/.test(imdbId || "")) return;
 		if (!entry.kpId && !card.data.title && !card.data.name && !card.data.original_title &&
 			!card.data.original_name && !card.data.imdb_id && !(card.data.external_ids && card.data.external_ids.imdb_id)) return;
 		var job = { card: card, paid: paid };
@@ -430,8 +451,13 @@
 					var kp = text.match(/<kp_rating\b[^>]*>([^<]*)<\/kp_rating>/i);
 					var imdb = text.match(/<imdb_rating\b[^>]*>([^<]*)<\/imdb_rating>/i);
 					if (kp || imdb) {
-						putRatings(job.card, kp && kp[1], imdb && imdb[1]);
-						return finish();
+						var kpValue = ratingValue(kp && kp[1]);
+						var imdbValue = ratingValue(imdb && imdb[1]);
+						if (kpValue && imdbValue) {
+							putRatings(job.card, kpValue, imdbValue);
+							return finish();
+						}
+						putPartialRatings(job.card, kpValue, imdbValue);
 					}
 				}
 				if (error && error.cancelled) finish(error);
@@ -439,34 +465,36 @@
 				else finish({ cancelled: true });
 			});
 		}
-		function search(query, trustedImdb, alternative) {
+		function search(url, trustedImdb, alternative) {
 			if (!stillWanted(job.card, true)) return finish({ cancelled: true });
-			request(apiUrl + query, "api", job.card, function (error, data) {
+			request(url, "api", job.card, function (error, data) {
 				if (error && error.status !== 404) return finish(error);
-				if (!error && (!data || !Array.isArray(data.items))) return finish({ status: 0 });
-				var found = selectFilm(error ? [] : data.items, job.card, trustedImdb);
+				var items = data && (data.items || data.films);
+				if (!error && !Array.isArray(items)) return finish({ status: 0 });
+				var found = selectFilm(error ? [] : items, job.card, trustedImdb);
 				if (!found) {
 					if (alternative) return search(alternative, false, "");
 					return finish({ status: 404 }, true);
 				}
-				var kpId = positiveId(found.kinopoiskId);
+				var kpId = positiveId(found.kinopoiskId || found.filmId || found.kp_id || found.kinopoisk_id);
 				if (!kpId) return finish({ status: 0 });
 				getEntry(job.card).kpId = kpId;
 				changed(job.card);
-				if (Object.prototype.hasOwnProperty.call(found, "ratingKinopoisk") &&
-					Object.prototype.hasOwnProperty.call(found, "ratingImdb")) save(found);
-				else xml(kpId);
+				if (ratingValue(found.ratingKinopoisk) && ratingValue(found.ratingImdb)) save(found);
+				else {
+					putPartialRatings(job.card, found.ratingKinopoisk, found.ratingImdb);
+					xml(kpId);
+				}
 			});
 		}
 		if (entry.kpId) return xml(entry.kpId);
 		var data = card.data;
 		var title = data.title || data.name || data.original_title || data.original_name;
 		var original = data.original_title || data.original_name;
-		var imdbId = data.imdb_id || (data.external_ids && data.external_ids.imdb_id);
-		var keyword = keywordQuery(card, title);
-		if (imdbId && /^tt\d+$/.test(imdbId)) search("?imdbId=" + encodeURIComponent(imdbId), true, keyword);
+		var keyword = keywordQuery(title);
+		if (imdbId && /^tt\d+$/.test(imdbId)) search(apiUrl + "?imdbId=" + encodeURIComponent(imdbId), true, keyword);
 		else if (keyword) search(keyword, false,
-			original && normalizeTitle(original) !== normalizeTitle(title) ? keywordQuery(card, original) : "");
+			original && normalizeTitle(original) !== normalizeTitle(title) ? keywordQuery(original) : "");
 		else finish({ status: 404 }, true);
 	}
 
@@ -544,7 +572,7 @@
 			var anchor = render.find(".rate--imdb, .rate--kp, .rate--tmdb, .full-start__rate, .full-start-new__rate").last();
 			if (!anchor.length) return block;
 			block = $('<div class="full-start__rate rate--' + name + '"><div></div>' +
-				(name === "cub" ? '<span class="rating-plugin-reaction"></span>' : '<div></div>') + '</div>');
+				(name === "cub" ? '<div class="rating-plugin-reaction"></div><div class="rating-plugin-cub-label"></div>' : '<div></div>') + '</div>');
 			if (name !== "cub") block.children("div").last().text(label);
 			anchor.after(block);
 		}
@@ -553,8 +581,8 @@
 		if (name === "cub") {
 			var icon = block.children(".rating-plugin-reaction").first();
 			if (!icon.length) icon = block.children("div").eq(1);
-			if (!icon.is("span")) {
-				var replacement = $('<span class="rating-plugin-reaction"></span>');
+			if (!icon.is("div")) {
+				var replacement = $('<div class="rating-plugin-reaction"></div>');
 				if (icon.length) {
 					replacement.append(icon.contents());
 					var reaction = icon.attr("data-reaction");
@@ -563,8 +591,11 @@
 				}
 				icon = replacement.appendTo(block);
 			}
-			block.children("div").slice(1).remove();
-			block.children(".rating-plugin-label").remove();
+			var caption = block.children("div").eq(2);
+			if (!caption.length) caption = $("<div>").appendTo(block);
+			caption.empty().removeClass("rating-plugin-label").addClass("rating-plugin-cub-label")
+				.attr("aria-hidden", "true");
+			block.children("div").slice(3).remove();
 			if (icon.text().trim()) icon.empty();
 			block.attr("aria-label", "Рейтинг CUB");
 		} else block.children("div").last().addClass("rating-plugin-label");
@@ -671,7 +702,7 @@
 		focusCard = null;
 		var active = Lampa.Activity.active();
 		if (active && active.component === "full") {
-			var card = describeCard(active.card || active.movie || active, active);
+			var card = describeCard(active.card || active.movie || active, active, !!active.card);
 			if (card) {
 				if (active.activity && typeof active.activity.render === "function") bindCard(card, active.activity.render());
 				else openCard(card);
@@ -695,7 +726,7 @@
 		var object = event.object || (event.link && (event.link.ratingPluginObject || event.link.object));
 		var active = Lampa.Activity.active();
 		if (object && object.activity && active && active.activity && object.activity !== active.activity) return;
-		var card = describeCard(data.movie, object);
+		var card = describeCard(data.movie, object, true);
 		if (!card) return;
 		if (event.type === "start") {
 			seedCard(card);
@@ -733,9 +764,9 @@
 			".rating-plugin-empty>.rating-plugin-value,.rating-plugin-empty>.rating-plugin-label{opacity:.4}" +
 			".rating-plugin-value:after{content:'';position:absolute;left:25%;right:25%;bottom:-.18em;height:1px;background:currentColor;opacity:0;transition:opacity .22s ease}" +
 			".rating-plugin-pending>.rating-plugin-value:after{animation:rating-plugin-loading 1.8s ease-in-out infinite}" +
-			".rate--cub.rating-plugin-rate{display:inline-flex;align-items:center;overflow:visible}" +
-			".rate--cub.rating-plugin-rate>.rating-plugin-reaction{display:block;flex:0 0 1.4em;width:1.4em;min-width:1.4em;height:1.2em;padding:0;margin:0;font-size:inherit;line-height:1;overflow:visible;box-sizing:content-box}" +
-			".rate--cub.rating-plugin-rate>.rating-plugin-reaction>img{display:block;width:1.2em;height:1.2em;max-width:none;max-height:none;margin:0 .1em;object-fit:contain;opacity:0;transition:opacity .22s ease}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-reaction{flex:0 0 auto;min-width:1.6em;overflow:visible;box-sizing:content-box}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-cub-label{display:none;padding-left:0}" +
+			".rate--cub.rating-plugin-rate>.rating-plugin-reaction>img{width:auto;height:1.2em;max-width:none;max-height:none;margin:0 .2em;opacity:0;transition:opacity .22s ease}" +
 			".rate--cub.rating-plugin-rate>.rating-plugin-reaction>img.rating-plugin-image-ready{opacity:1}" +
 			"@keyframes rating-plugin-loading{0%,100%{opacity:.2}50%{opacity:.65}}" +
 			"@media(prefers-reduced-motion:reduce){.rating-plugin-pending>.rating-plugin-value:after{animation:none;opacity:.4}.rating-plugin-value,.rating-plugin-label,.rating-plugin-reaction img{transition:none!important}}"
