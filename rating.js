@@ -538,28 +538,26 @@
 		return { value: (prior * confidence + sum) / (confidence + count), reaction: median };
 	}
 
-	function colorFor(value) {
-		if (!value) return "";
-		if (value <= 3) return "red";
-		if (value < 6) return "orange";
-		if (value < 7) return "cornflowerblue";
-		if (value < 8) return "darkmagenta";
-		return "lawngreen";
-	}
-
 	function ensureBlock(render, name, label) {
 		var block = render.find(".rate--" + name).first();
 		if (!block.length) {
 			var anchor = render.find(".rate--imdb, .rate--kp, .rate--tmdb, .full-start__rate, .full-start-new__rate").last();
 			if (!anchor.length) return block;
 			block = $('<div class="full-start__rate rate--' + name + '"><div></div>' +
-				(name === "cub" ? '<div class="rating-plugin-reaction"></div>' : "") + '<div></div></div>');
-			block.children("div").last().text(label);
+				(name === "cub" ? '<div class="rating-plugin-reaction"></div>' : '<div></div>') + '</div>');
+			if (name !== "cub") block.children("div").last().text(label);
 			anchor.after(block);
 		}
 		block.addClass("rating-plugin-rate").removeClass("hide");
 		block.children("div").first().addClass("rating-plugin-value");
-		block.children("div").last().addClass("rating-plugin-label");
+		if (name === "cub") {
+			block.children("div").slice(2).remove();
+			var icon = block.children("div").eq(1);
+			if (!icon.length) icon = $("<div>").appendTo(block);
+			icon.removeClass("rating-plugin-label").addClass("rating-plugin-reaction");
+			if (icon.text().trim()) icon.empty();
+			block.attr("aria-label", "Рейтинг CUB");
+		} else block.children("div").last().addClass("rating-plugin-label");
 		return block;
 	}
 
@@ -572,12 +570,7 @@
 			.toggleClass("rating-plugin-empty", !value);
 		block.attr("aria-busy", !value && loading ? "true" : "false");
 		block.attr("title", value ? "" : loading ? "Загрузка рейтинга" : unavailable);
-		var color = Lampa.Storage.get("si_colored_ratings", true) ? colorFor(value) : "";
-		var outlined = Lampa.Storage.get("si_rating_border", false);
-		block.toggleClass("rating-plugin-outlined", !!outlined);
-		number.css("color", color);
-		block.children("div").last().css("color", color);
-		block.css("border", outlined ? "1px solid " + (color || "transparent") : "");
+		Lampa.Listener.send("rating:updated", { render: block });
 	}
 
 	function draw(context) {
@@ -590,12 +583,9 @@
 		showValue(ensureBlock(context.render, "imdb", "IMDb"), ratingValue(ratings.imdb), waiting, message);
 		if (context.card.source !== "tmdb") return;
 		var cub = cubRating(context.card);
-		var block = ensureBlock(context.render, "cub", "CUB");
+		var block = ensureBlock(context.render, "cub", "");
 		showValue(block, cub ? cub.value : 0, !!pendingCub[context.card.key], "Для оценки нужно минимум 20 реакций");
-		var icon;
-		if (block.children("div").length < 3) {
-			icon = $('<div class="rating-plugin-reaction"></div>').insertBefore(block.children("div").last());
-		} else icon = block.children("div").eq(1).addClass("rating-plugin-reaction");
+		var icon = block.children(".rating-plugin-reaction").first();
 		var reaction = cub ? cub.reaction : "";
 		if (icon.attr("data-reaction") !== reaction) {
 			icon.attr("data-reaction", reaction).empty();
@@ -727,10 +717,9 @@
 
 	function installStyles() {
 		$("<style>").text(
-			".rating-plugin-rate{font-variant-numeric:tabular-nums;transition:border-color .22s ease}" +
-			".rating-plugin-rate.rating-plugin-outlined{border:1px solid transparent;border-width:1px!important;border-style:solid!important}" +
-			".rating-plugin-rate>.rating-plugin-value{position:relative;width:3ch;min-width:3ch;flex:0 0 3ch;text-align:center;transition:opacity .22s ease,color .22s ease}" +
-			".rating-plugin-rate>.rating-plugin-label{transition:opacity .22s ease,color .22s ease}" +
+			".rating-plugin-rate{font-variant-numeric:tabular-nums}" +
+			".rating-plugin-rate>.rating-plugin-value{position:relative;width:3ch;min-width:3ch;flex:0 0 3ch;text-align:center;transition:opacity .22s ease}" +
+			".rating-plugin-rate>.rating-plugin-label{transition:opacity .22s ease}" +
 			".rating-plugin-empty>.rating-plugin-value,.rating-plugin-empty>.rating-plugin-label{opacity:.4}" +
 			".rating-plugin-value:after{content:'';position:absolute;left:25%;right:25%;bottom:-.18em;height:1px;background:currentColor;opacity:0;transition:opacity .22s ease}" +
 			".rating-plugin-pending>.rating-plugin-value:after{animation:rating-plugin-loading 1.8s ease-in-out infinite}" +
@@ -805,7 +794,6 @@
 		});
 		window.addEventListener("pagehide", flushCache);
 		if (Lampa.Storage.listener) Lampa.Storage.listener.follow("change", function (event) {
-			if (current && (event.name === "si_colored_ratings" || event.name === "si_rating_border")) draw(current);
 			if (current && event.name === "rating_api_key") fetchRatings(current.card, true);
 		});
 		activeChanged();
