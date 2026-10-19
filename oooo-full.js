@@ -4537,7 +4537,7 @@
 		});
 
 		var button =
-			'<div class="full-start__button selector view--online lampac--button" data-subtitle="'.concat(
+			'<div class="full-start__button selector view--online lamponline--button" data-subtitle="'.concat(
 				manifst.name,
 				' ',
 				manifst.version,
@@ -4547,7 +4547,7 @@
 		Lampa.Component.add("lamponline", component);
 
 		function addButton(e) {
-			if (e.render.siblings(".lampac--button").length) return;
+			if (e.render.siblings(".lamponline--button").length) return;
 			var btn = $(Lampa.Lang.translate(button));
 			btn.on("hover:enter", function () {
 				Lampa.Component.add("lamponline", component);
